@@ -1,0 +1,26 @@
+# Core ML
+torch==2.1.0+cpu
+torchvision==0.16.0+cpu
+timm==0.9.12
+pytorch-lightning==2.1.0
+
+# Data processing
+albumentations==2.0.3
+opencv-python-headless==4.10.0.84
+Pillow==10.4.0
+numpy==1.26.4
+
+# API
+fastapi==0.104.1
+uvicorn==0.24.0
+python-multipart==0.0.6
+httpx==0.25.0
+
+# Utils
+pandas==2.1.0
+tqdm==4.66.1
+pyyaml==6.0
+
+# Testing
+pytest==7.4.3
+pytest-cov==4.1.0

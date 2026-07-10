@@ -1,15 +1,36 @@
+# Core ML
 torch>=2.1.0
 torchvision>=0.16.0
 timm>=0.9.0
-albumentations>=1.3.0
 pytorch-lightning>=2.1.0
-optuna>=3.4.0
-wandb>=0.15.0
+
+# Data processing
+albumentations>=2.0.0
+opencv-python-headless>=4.10.0
+Pillow>=10.0.0
+numpy>=1.26.0
+
+# API
+fastapi>=0.104.0
+uvicorn>=0.24.0
+python-multipart>=0.0.6
+httpx>=0.24.0
+httpx2>=0.1.0
+
+# Utils
 pandas>=2.1.0
-opencv-python>=4.8.0
+tqdm>=4.66.0
+pyyaml>=6.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Visualization
 matplotlib>=3.8.0
 seaborn>=0.13.0
 scikit-learn>=1.3.0
-tqdm>=4.66.0
-pyyaml>=6.0
-jupyter>=1.0.0
+
+# Experiment tracking
+wandb>=0.15.0
+optuna>=3.4.0

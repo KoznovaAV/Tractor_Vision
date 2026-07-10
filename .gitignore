@@ -1,18 +1,49 @@
+# Python cache
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.pyo
 .Python
-env/
+
+# Virtual environments
 venv/
+env/
 ENV/
-build/
-*.egg-info/
-.ipynb_checkpoints
-*.ipynb
-wandb/
-weights/
-output/
-data/raw/
-data/processed/
+.venv/
 .env
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+.mypy_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.ipynb_checkpoints
+
+# Jupyter
+*.ipynb
+
+# Build
+build/
+dist/
+*.egg-info/
+
+# Logs
+*.log
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Project specific
+wandb/
+output/
+/data/
+/weights/
