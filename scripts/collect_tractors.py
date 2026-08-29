@@ -48,14 +48,38 @@ from src.config.classes import MODEL_CLASSES
 # Ключевые слова для каждого класса. Первый элемент — «якорь», остальные
 # расширяют покрытие. Класс mtz_82 включает исторически слитый mtz_1221.
 CLASS_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "chtz_b10m": ("трактор ЧТЗ Б10М", "бульдозер Б10М", "ChTZ B10M bulldozer"),
-    "johndeere": ("трактор John Deere", "John Deere tractor", "трактор Джон Дир"),
-    "kirovets_k744": ("трактор Кировец К-744", "Kirovets K-744", "трактор Кировец"),
+    "chtz_b10m": (
+        "трактор ЧТЗ Б10М",
+        "бульдозер Б10М",
+        "ChTZ B10M bulldozer",
+        "бульдозер Б-10М фото",
+        "Челябинский тракторный завод Б10М",
+        "B10M bulldozer photo",
+    ),
+    "johndeere": (
+        "трактор John Deere",
+        "John Deere tractor",
+        "трактор Джон Дир",
+        "John Deere 6M tractor",
+        "John Deere tractor field",
+        "зелёный трактор John Deere фото",
+    ),
+    "kirovets_k744": (
+        "трактор Кировец К-744",
+        "Kirovets K-744",
+        "трактор Кировец",
+        "Кировец К-744М фото",
+        "Kirovets tractor red",
+        "трактор К-7М Кировец",
+    ),
     "mtz_belarus": (
         "трактор МТЗ-82 Беларус",
         "трактор Беларус МТЗ",
         "MTZ-82 Belarus tractor",
         "трактор МТЗ-1221",
+        "Беларус 82.1 трактор фото",
+        "МТЗ-80 трактор",
+        "Belarus tractor blue field",
     ),
 }
 
@@ -389,13 +413,18 @@ class RateLimitedDownloader:
         Returns:
             Сырые байты либо ``None`` при ошибке.
         """
+        from urllib.parse import quote
+
         self._throttle()
         try:
-            request = Request(url, headers={"User-Agent": self.user_agent})
+            # URL-кодируем не-ASCII символы (кириллицу и т.п.)
+            encoded_url = quote(url, safe=":/?#[]@!$&'()*+,;=-._~%")
+            request = Request(encoded_url, headers={"User-Agent": self.user_agent})
             with urlopen(request, timeout=self.timeout) as response:
                 return response.read()
         except Exception as exc:  # noqa: BLE001 — сеть непредсказуема
-            print(f"    [dl] не удалось скачать {url[:80]}: {exc}")
+            # repr() — чтобы избежать UnicodeEncodeError в консоли Windows
+            print(f"    [dl] не удалось скачать {url[:80]!r}: {exc}")
             return None
 
 
