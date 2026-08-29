@@ -89,9 +89,7 @@ class TractorClassifier(nn.Module):
             logger.error(msg)
             raise IndexError(msg) from exc
 
-        self.backbone.classifier[CLASSIFIER_HEAD_INDEX] = nn.Linear(
-            num_features, num_classes
-        )
+        self.backbone.classifier[CLASSIFIER_HEAD_INDEX] = nn.Linear(num_features, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Выполняет прямой проход: изображение → логиты классов.

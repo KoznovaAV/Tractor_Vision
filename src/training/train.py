@@ -47,16 +47,12 @@ class TractorLightningModule(pl.LightningModule):
 
         self.train_acc = Accuracy(task="multiclass", num_classes=num_classes)
         self.val_acc = Accuracy(task="multiclass", num_classes=num_classes)
-        self.val_f1 = F1Score(
-            task="multiclass", num_classes=num_classes, average="macro"
-        )
+        self.val_f1 = F1Score(task="multiclass", num_classes=num_classes, average="macro")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x)
 
-    def training_step(
-        self, batch: dict[str, torch.Tensor], batch_idx: int
-    ) -> torch.Tensor:
+    def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         images, labels = batch["image"], batch["label"]
         logits = self(images)
         loss = self.criterion(logits, labels)
@@ -68,9 +64,7 @@ class TractorLightningModule(pl.LightningModule):
         self.log("train_acc", self.train_acc, prog_bar=True)
         return loss
 
-    def validation_step(
-        self, batch: dict[str, torch.Tensor], batch_idx: int
-    ) -> torch.Tensor:
+    def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         images, labels = batch["image"], batch["label"]
         logits = self(images)
         loss = self.criterion(logits, labels)
@@ -153,9 +147,7 @@ def create_callbacks() -> list[pl.Callback]:
     return [checkpoint_callback, early_stopping]
 
 
-def create_trainer(
-    args: argparse.Namespace, callbacks: list[pl.Callback]
-) -> pl.Trainer:
+def create_trainer(args: argparse.Namespace, callbacks: list[pl.Callback]) -> pl.Trainer:
     """Создаёт PyTorch Lightning trainer."""
     return pl.Trainer(
         max_epochs=args.epochs,

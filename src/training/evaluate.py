@@ -26,9 +26,7 @@ IMAGENET_MEAN = np.array([0.485, 0.456, 0.406])
 IMAGENET_STD = np.array([0.229, 0.224, 0.225])
 
 
-def load_model(
-    checkpoint_path: Path, num_classes: int = len(CLASS_NAMES)
-) -> torch.nn.Module:
+def load_model(checkpoint_path: Path, num_classes: int = len(CLASS_NAMES)) -> torch.nn.Module:
     """Загружает модель из checkpoint."""
     model = TractorClassifier(num_classes=num_classes)
 
@@ -45,9 +43,7 @@ def load_model(
     return model
 
 
-def create_test_loader(
-    data_dir: Path, batch_size: int = 16, image_size: int = 224
-) -> DataLoader:
+def create_test_loader(data_dir: Path, batch_size: int = 16, image_size: int = 224) -> DataLoader:
     """Создаёт DataLoader для test-набора."""
     dataset = TractorDataset(
         root_dir=data_dir / "test",
@@ -60,24 +56,16 @@ def create_metrics(num_classes: int, device: torch.device) -> dict:
     """Создаёт метрики для оценки."""
     return {
         "accuracy": Accuracy(task="multiclass", num_classes=num_classes).to(device),
-        "precision": Precision(
-            task="multiclass", num_classes=num_classes, average="macro"
-        ).to(device),
-        "recall": Recall(
-            task="multiclass", num_classes=num_classes, average="macro"
-        ).to(device),
-        "f1": F1Score(task="multiclass", num_classes=num_classes, average="macro").to(
+        "precision": Precision(task="multiclass", num_classes=num_classes, average="macro").to(
             device
         ),
-        "confusion_matrix": ConfusionMatrix(
-            task="multiclass", num_classes=num_classes
-        ).to(device),
+        "recall": Recall(task="multiclass", num_classes=num_classes, average="macro").to(device),
+        "f1": F1Score(task="multiclass", num_classes=num_classes, average="macro").to(device),
+        "confusion_matrix": ConfusionMatrix(task="multiclass", num_classes=num_classes).to(device),
     }
 
 
-def evaluate_model(
-    model: torch.nn.Module, loader: DataLoader, device: torch.device
-) -> dict:
+def evaluate_model(model: torch.nn.Module, loader: DataLoader, device: torch.device) -> dict:
     """Оценивает модель на test-наборе."""
     metrics = create_metrics(len(CLASS_NAMES), device)
     all_preds, all_labels = [], []
@@ -236,9 +224,7 @@ def main():
     print(f"F1-score:  {metrics['f1']:.4f}")
     print("=" * 60)
 
-    plot_confusion_matrix(
-        metrics["confusion_matrix"], OUTPUT_DIR / "confusion_matrix.png"
-    )
+    plot_confusion_matrix(metrics["confusion_matrix"], OUTPUT_DIR / "confusion_matrix.png")
 
     errors = find_misclassified_examples(loader, model, device)
     plot_misclassified_examples(errors, OUTPUT_DIR / "misclassified_examples.png")

@@ -222,10 +222,7 @@ class PerceptualDeduplicator:
         Returns:
             ``True``, если найден достаточно близкий принятый хеш.
         """
-        return any(
-            (image_hash - existing) <= self.hamming_threshold
-            for existing in self._hashes
-        )
+        return any((image_hash - existing) <= self.hamming_threshold for existing in self._hashes)
 
     def add(self, image_hash: Any) -> None:
         """Зарегистрировать хеш как принятый.
@@ -720,9 +717,7 @@ def main(argv: list[str] | None = None) -> int:
         all_stats[model_class] = stats
 
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print("\n" + "=" * 60)
     print("ИТОГ СБОРА")

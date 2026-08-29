@@ -47,3 +47,5 @@ wandb/
 output/
 /data/
 /weights/
+
+lightning_logs/

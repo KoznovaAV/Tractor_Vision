@@ -33,9 +33,7 @@ def load_model(checkpoint_path: Path) -> torch.nn.Module:
     return model
 
 
-def create_val_loader(
-    data_dir: Path, batch_size: int = 16, image_size: int = 384
-) -> DataLoader:
+def create_val_loader(data_dir: Path, batch_size: int = 16, image_size: int = 384) -> DataLoader:
     """Создаёт DataLoader для val-набора."""
     dataset = TractorDataset(
         root_dir=data_dir / "val",
@@ -45,9 +43,7 @@ def create_val_loader(
     return DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
 
-def evaluate_model(
-    model: torch.nn.Module, loader: DataLoader, device: torch.device
-) -> dict:
+def evaluate_model(model: torch.nn.Module, loader: DataLoader, device: torch.device) -> dict:
     """Оценивает модель на обеих задачах."""
     model_preds, model_labels = [], []
     state_preds, state_labels = [], []

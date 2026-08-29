@@ -49,12 +49,8 @@ CLASS_ALIASES: Final[dict[str, str]] = {
 CLASS_NAMES: Final[tuple[str, ...]] = MODEL_CLASSES
 NUM_CLASSES: Final[int] = NUM_MODEL_CLASSES
 
-_MODEL_CLASS_TO_IDX: Final[dict[str, int]] = {
-    name: idx for idx, name in enumerate(MODEL_CLASSES)
-}
-_STATE_CLASS_TO_IDX: Final[dict[str, int]] = {
-    name: idx for idx, name in enumerate(STATE_CLASSES)
-}
+_MODEL_CLASS_TO_IDX: Final[dict[str, int]] = {name: idx for idx, name in enumerate(MODEL_CLASSES)}
+_STATE_CLASS_TO_IDX: Final[dict[str, int]] = {name: idx for idx, name in enumerate(STATE_CLASSES)}
 
 
 def canonical_class(name: str) -> str:
@@ -76,9 +72,7 @@ def class_to_idx(name: str) -> int:
 def state_to_idx(name: str) -> int:
     """Индекс класса состояния (clean/dirty) по имени."""
     if name not in _STATE_CLASS_TO_IDX:
-        raise KeyError(
-            f"Неизвестный класс состояния: {name!r}. Ожидались: {STATE_CLASSES}."
-        )
+        raise KeyError(f"Неизвестный класс состояния: {name!r}. Ожидались: {STATE_CLASSES}.")
     return _STATE_CLASS_TO_IDX[name]
 
 

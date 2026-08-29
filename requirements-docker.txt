@@ -1,7 +1,9 @@
 # Core ML
-torch==2.1.0+cpu
-torchvision==0.16.0+cpu
-timm==0.9.12
+# ВАЖНО: без суффикса +cpu. Вариант (cpu/cuda) выбирается в Dockerfile через
+# --extra-index-url по build-arg TORCH_VARIANT. Суффикс +cpu жёстко привязал бы
+# образ к CPU-колёсам, и GPU-сборка (TORCH_VARIANT=cu121) не нашла бы колёса.
+torch==2.1.0
+torchvision==0.16.0
 pytorch-lightning==2.1.0
 
 # Data processing
@@ -10,15 +12,19 @@ opencv-python-headless==4.10.0.84
 Pillow==10.4.0
 numpy==1.26.4
 
+# Dataset collection & labeling
+imagehash==4.3.2
+ddgs==9.16.0
+open_clip_torch==2.32.0
+timm==1.0.17  # требуется open_clip_torch (ранее был несовместимый пин 0.9.12)
+
 # API
 fastapi==0.104.1
 uvicorn==0.24.0
 python-multipart==0.0.6
 httpx==0.25.0
 
-# Utils
-pandas==2.1.0
-tqdm==4.66.1
+# Config
 pyyaml==6.0
 
 # Testing

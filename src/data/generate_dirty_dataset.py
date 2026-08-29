@@ -117,9 +117,29 @@ def apply_mud_overlay(rng: np.random.Generator, image: np.ndarray) -> np.ndarray
     noise = _value_noise(rng, (height, width), octaves=5)
 
     # Порог отсекает часть площади — грязь покрывает не весь кадр.
-    threshold = rng.uniform(0.45, 0.65)
+    # Диапазон чуть шире, чтобы пятна были крупнее.
+    threshold = rng.uniform(0.40, 0.60)
     mask = np.clip((noise - threshold) / (1.0 - threshold), 0.0, 1.0)
     mask *= rng.uniform(0.4, 0.85)  # общая интенсивность
+
+    # Вертикальный градиент веса: у верхнего края (небо/фон) грязь подавляется
+    # (~0.3), у нижнего (техника, колёса, крылья) — полная сила (1.0). Это
+    # смещает грязь на объект и убирает спурный признак «точки на небе».
+    vertical_weight = np.linspace(0.3, 1.0, height, dtype=np.float32)
+    mask *= vertical_weight[:, None]
+
+    # Опциональный «грязевой фартук»: в ~30% случаев добавляем полосу грязи в
+    # нижней четверти кадра (зона колёс/крыльев, где грязь скапливается сильнее).
+    if rng.random() < 0.30:
+        apron = np.zeros(height, dtype=np.float32)
+        apron_start = int(height * 0.75)
+        # Плавно нарастающая к низу полоса.
+        apron[apron_start:] = np.linspace(0.0, 1.0, height - apron_start, dtype=np.float32)
+        apron_strength = rng.uniform(0.35, 0.7)
+        # Фартук комбинируется с шумовой маской по максимуму, чтобы низ кадра
+        # был гарантированно грязным, но с сохранением текстуры.
+        apron_mask = apron[:, None] * apron_strength * (0.5 + 0.5 * noise)
+        mask = np.maximum(mask, apron_mask)
 
     # Землистый цвет грязи с вариацией оттенка.
     mud_color = np.array(
@@ -188,7 +208,7 @@ def apply_splatter(rng: np.random.Generator, image: np.ndarray) -> np.ndarray:
         )
         alpha = float(rng.uniform(0.5, 0.9))
 
-        drop = np.zeros((height, width), dtype=np.float32)
+        drop: np.ndarray = np.zeros((height, width), dtype=np.float32)
         cv2.circle(drop, (center_x, center_y), radius, 1.0, thickness=-1)
         drop = cv2.GaussianBlur(drop, (0, 0), sigmaX=radius * 0.5 + 0.5)
         drop_3 = (drop * alpha)[..., None]
@@ -208,7 +228,7 @@ def apply_rain(rng: np.random.Generator, image: np.ndarray) -> np.ndarray:
         Изображение с дождём.
     """
     height, width = image.shape[:2]
-    rain_layer = np.zeros((height, width), dtype=np.float32)
+    rain_layer: np.ndarray = np.zeros((height, width), dtype=np.float32)
 
     num_streaks = rng.integers(200, 600)
     angle = rng.uniform(-0.35, 0.35)  # наклон в радианах от вертикали
@@ -233,7 +253,7 @@ def apply_rain(rng: np.random.Generator, image: np.ndarray) -> np.ndarray:
     # Мокрая сцена слегка размыта.
     blurred = cv2.GaussianBlur(image, (0, 0), sigmaX=rng.uniform(0.5, 1.2))
     rainy = blurred * (1.0 - rain_alpha) + rain_alpha  # штрихи почти белые
-    return np.clip(rainy, 0.0, 1.0)
+    return np.asarray(np.clip(rainy, 0.0, 1.0), dtype=np.float32)
 
 
 def apply_fog(rng: np.random.Generator, image: np.ndarray) -> np.ndarray:
@@ -255,7 +275,7 @@ def apply_fog(rng: np.random.Generator, image: np.ndarray) -> np.ndarray:
     density = rng.uniform(0.2, 0.5)
     fog_color = float(rng.uniform(0.75, 0.9))
     foggy = image * (1.0 - density * fog) + fog_color * density * fog
-    return np.clip(foggy, 0.0, 1.0)
+    return np.asarray(np.clip(foggy, 0.0, 1.0), dtype=np.float32)
 
 
 def apply_occlusion(rng: np.random.Generator, image: np.ndarray) -> np.ndarray:
@@ -271,12 +291,10 @@ def apply_occlusion(rng: np.random.Generator, image: np.ndarray) -> np.ndarray:
         Частично перекрытое изображение.
     """
     height, width = image.shape[:2]
-    mask = np.zeros((height, width), dtype=np.float32)
+    mask: np.ndarray = np.zeros((height, width), dtype=np.float32)
 
     # Случайный выпуклый-ish полигон вокруг случайного центра.
-    center = np.array(
-        [rng.integers(0, width), rng.integers(0, height)], dtype=np.float32
-    )
+    center = np.array([rng.integers(0, width), rng.integers(0, height)], dtype=np.float32)
     num_points = int(rng.integers(6, 12))
     max_r = min(height, width) * rng.uniform(0.15, 0.35)
     angles = np.sort(rng.uniform(0, 2 * np.pi, size=num_points))
@@ -303,7 +321,8 @@ def apply_occlusion(rng: np.random.Generator, image: np.ndarray) -> np.ndarray:
     ).astype(np.float32)
 
     alpha = (mask * rng.uniform(0.7, 0.95))[..., None]
-    return image * (1.0 - alpha) + mud * alpha
+    blended = image * (1.0 - alpha) + mud * alpha
+    return np.asarray(blended, dtype=np.float32)
 
 
 def apply_lighting(rng: np.random.Generator, image: np.ndarray) -> np.ndarray:
@@ -338,7 +357,7 @@ def apply_lighting(rng: np.random.Generator, image: np.ndarray) -> np.ndarray:
     channel_scale = np.array([1.0 + temp, 1.0, 1.0 - temp], dtype=np.float32)
     result = result * channel_scale[None, None, :]
 
-    return np.clip(result, 0.0, 1.0)
+    return np.asarray(np.clip(result, 0.0, 1.0), dtype=np.float32)
 
 
 # Реестр деградаций с весами выбора. Грязевые эффекты приоритетнее погодных.
@@ -378,9 +397,7 @@ def build_pipeline(
     count = int(rng.integers(min_effects, max_effects + 1))
     chosen = [
         str(name)
-        for name in rng.choice(
-            names, size=min(count, len(names)), replace=False, p=weights
-        )
+        for name in rng.choice(names, size=min(count, len(names)), replace=False, p=weights)
     ]
 
     # Обязательно хотя бы один грязевой эффект.
@@ -419,7 +436,7 @@ def generate_dirty_image(
     for name, func in pipeline:
         result = func(rng, result)
         applied.append(name)
-    return np.clip(result, 0.0, 1.0), applied
+    return np.asarray(np.clip(result, 0.0, 1.0), dtype=np.float32), applied
 
 
 # ---------------------------------------------------------------------------
@@ -449,9 +466,7 @@ def _save_image(path: Path, image: np.ndarray) -> None:
         image: Массив ``float32`` ``[0, 1]``, форма ``(H, W, 3)``.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    bgr = cv2.cvtColor(
-        np.clip(image * 255.0, 0, 255).astype(np.uint8), cv2.COLOR_RGB2BGR
-    )
+    bgr = cv2.cvtColor(np.clip(image * 255.0, 0, 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
     cv2.imwrite(str(path), bgr)
 
 
@@ -518,9 +533,7 @@ def process_tree(
                 continue
 
             # clean-копия.
-            clean_dest = (
-                output_root / split_name / class_name / "clean" / image_path.name
-            )
+            clean_dest = output_root / split_name / class_name / "clean" / image_path.name
             _save_image(clean_dest, image)
             counts["clean"] += 1
 
@@ -528,13 +541,9 @@ def process_tree(
             for variant in range(dirty_per_clean):
                 variant_seed = int(master_rng.integers(0, 2**32 - 1))
                 variant_rng = np.random.default_rng(variant_seed)
-                dirty, applied = generate_dirty_image(
-                    variant_rng, image, min_effects, max_effects
-                )
+                dirty, applied = generate_dirty_image(variant_rng, image, min_effects, max_effects)
                 dirty_name = f"{image_path.stem}_dirty{variant}{image_path.suffix}"
-                dirty_dest = (
-                    output_root / split_name / class_name / "dirty" / dirty_name
-                )
+                dirty_dest = output_root / split_name / class_name / "dirty" / dirty_name
                 _save_image(dirty_dest, dirty)
                 counts["dirty"] += 1
 

@@ -182,16 +182,10 @@ def _find_alias_dirs(split_root: Path) -> list[Path]:
         Список путей директорий-источников для слияния.
     """
     alias_names = set(CLASS_ALIASES.keys())
-    return [
-        path
-        for path in split_root.rglob("*")
-        if path.is_dir() and path.name in alias_names
-    ]
+    return [path for path in split_root.rglob("*") if path.is_dir() and path.name in alias_names]
 
 
-def _process_tree(
-    tree_root: Path, tree_label: str, stats: MergeStats, dry_run: bool
-) -> None:
+def _process_tree(tree_root: Path, tree_label: str, stats: MergeStats, dry_run: bool) -> None:
     """Обработать одно дерево датасета целиком.
 
     Args:
@@ -255,9 +249,7 @@ def _process_tree(
         )
         # В режиме dry-run файлы не перемещались, поэтому оцениваем результат.
         stats.after_counts[key] = (
-            after
-            if not dry_run
-            else before + sum(_count_images(src) for src in alias_dirs)
+            after if not dry_run else before + sum(_count_images(src) for src in alias_dirs)
         )
 
 

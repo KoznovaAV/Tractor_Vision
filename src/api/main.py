@@ -39,9 +39,7 @@ async def lifespan(app: FastAPI):
     if single_task_path.exists():
         try:
             single_task_model = TractorClassifier(num_classes=len(CLASS_NAMES))
-            checkpoint = torch.load(
-                single_task_path, map_location="cpu", weights_only=False
-            )
+            checkpoint = torch.load(single_task_path, map_location="cpu", weights_only=False)
             state_dict = checkpoint.get("state_dict", checkpoint)
             single_task_model.load_state_dict(state_dict)
             single_task_model.eval()
@@ -53,9 +51,7 @@ async def lifespan(app: FastAPI):
     if multi_task_path.exists():
         try:
             multi_task_model = MultiTaskTractorClassifier()
-            checkpoint = torch.load(
-                multi_task_path, map_location="cpu", weights_only=False
-            )
+            checkpoint = torch.load(multi_task_path, map_location="cpu", weights_only=False)
             state_dict = checkpoint.get("state_dict", checkpoint)
             multi_task_model.load_state_dict(state_dict)
             multi_task_model.eval()
