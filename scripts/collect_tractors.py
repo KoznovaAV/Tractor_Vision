@@ -51,7 +51,7 @@ CLASS_KEYWORDS: dict[str, tuple[str, ...]] = {
     "chtz_b10m": ("трактор ЧТЗ Б10М", "бульдозер Б10М", "ChTZ B10M bulldozer"),
     "johndeere": ("трактор John Deere", "John Deere tractor", "трактор Джон Дир"),
     "kirovets_k744": ("трактор Кировец К-744", "Kirovets K-744", "трактор Кировец"),
-    "mtz_82": (
+    "mtz_belarus": (
         "трактор МТЗ-82 Беларус",
         "трактор Беларус МТЗ",
         "MTZ-82 Belarus tractor",

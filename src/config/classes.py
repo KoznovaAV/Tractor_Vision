@@ -28,7 +28,7 @@ MODEL_CLASSES: Final[tuple[str, ...]] = (
     "chtz_b10m",
     "johndeere",
     "kirovets_k744",
-    "mtz_82",
+    "mtz_belarus",
 )
 NUM_MODEL_CLASSES: Final[int] = len(MODEL_CLASSES)
 
@@ -42,7 +42,8 @@ NUM_STATE_CLASSES: Final[int] = len(STATE_CLASSES)
 # Псевдонимы, сливаемые в канонический класс (для скрипта слияния и разметки).
 # ---------------------------------------------------------------------------
 CLASS_ALIASES: Final[dict[str, str]] = {
-    "mtz_1221": "mtz_82",
+    "mtz_1221": "mtz_belarus",
+    "mtz_82": "mtz_belarus",
 }
 
 # Обратная совместимость: тот же кортеж, псевдоним, а не копия.
