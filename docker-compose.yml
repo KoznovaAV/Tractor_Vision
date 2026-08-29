@@ -1,57 +1,116 @@
-version: '3.8'
+# Tractor Vision — оркестрация сервисов.
+#
+# ИСПРАВЛЕНО (было противоречие): раньше train/train-multi безусловно
+# резервировали NVIDIA GPU (deploy.resources.reservations.devices), из-за чего
+# `docker compose up` падал на машине без nvidia-драйвера, хотя образ был
+# CPU-only. Теперь конфигурация разнесена по профилям:
+#
+#   * Профиль cpu (по умолчанию) — train/train-multi/api/test на CPU-образе,
+#     никаких GPU-резерваций. Работает на любой машине из коробки:
+#         docker compose --profile cpu up train
+#     (api и test не привязаны к профилю и доступны всегда.)
+#
+#   * Профиль gpu — те же обучающие сервисы, но образ собран с CUDA-колёсами
+#     (TORCH_VARIANT=cu121) и резервирует одну NVIDIA-карту. Требует
+#     nvidia-container-toolkit на хосте:
+#         docker compose --profile gpu up train-gpu
+#
+# Сервисы без profiles (api, test) поднимаются всегда:
+#     docker compose up api
+#
+# Примечание: version-ключ намеренно опущён — в Compose v2 он устарел и
+# вызывает предупреждение.
+
+# --- Переиспользуемые фрагменты через YAML-якоря ---------------------------
+
+# Общие тома для обучающих сервисов.
+x-train-volumes: &train-volumes
+  - ./data:/app/data
+  - ./weights:/app/weights
+  - ./output:/app/output
+
+# Сборка CPU-варианта образа.
+x-build-cpu: &build-cpu
+  context: .
+  args:
+    TORCH_VARIANT: cpu
+
+# Сборка GPU-варианта образа (CUDA 12.1).
+x-build-gpu: &build-gpu
+  context: .
+  args:
+    TORCH_VARIANT: cu121
+
+# Блок резервирования NVIDIA GPU — только для gpu-профиля.
+x-gpu-deploy: &gpu-deploy
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: 1
+          capabilities: [gpu]
 
 services:
-  # Обучение Single-Task модели
+  # ---- CPU-профиль: обучение на CPU (работает везде) ----------------------
   train:
-    build: .
+    profiles: ["cpu"]
+    build: *build-cpu
+    image: tractor-vision:cpu
     command: python -m src.training.train
-    volumes:
-      - ./data:/app/data
-      - ./weights:/app/weights
-      - ./output:/app/output
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    volumes: *train-volumes
 
-  # Обучение Multi-Task модели
   train-multi:
-    build: .
+    profiles: ["cpu"]
+    build: *build-cpu
+    image: tractor-vision:cpu
     command: python -m src.training.multi_task_train
-    volumes:
-      - ./data:/app/data
-      - ./weights:/app/weights
-      - ./output:/app/output
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    volumes: *train-volumes
 
-  # API сервис
+  # ---- GPU-профиль: то же обучение, но на CUDA-образе с резервом карты -----
+  train-gpu:
+    profiles: ["gpu"]
+    build: *build-gpu
+    image: tractor-vision:gpu
+    command: python -m src.training.train
+    volumes: *train-volumes
+    deploy: *gpu-deploy
+
+  train-multi-gpu:
+    profiles: ["gpu"]
+    build: *build-gpu
+    image: tractor-vision:gpu
+    command: python -m src.training.multi_task_train
+    volumes: *train-volumes
+    deploy: *gpu-deploy
+
+  # ---- API-сервис: CPU-инференс, доступен всегда (без профиля) -------------
   api:
-    build: .
+    build: *build-cpu
+    image: tractor-vision:cpu
     command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     volumes:
       - ./weights:/app/weights:ro
+      - ./config.yaml:/app/config.yaml:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://localhost:8000/health')
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
 
-  # Запуск тестов
+  # ---- Тесты: CPU, доступны всегда (без профиля) --------------------------
   test:
-    build: .
+    build: *build-cpu
+    image: tractor-vision:cpu
     command: pytest tests/ -v --cov=src
     volumes:
       - ./data:/app/data

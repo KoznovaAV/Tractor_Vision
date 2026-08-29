@@ -2,6 +2,7 @@
 
 import torch
 
+from src.config.classes import NUM_MODEL_CLASSES, NUM_STATE_CLASSES
 from src.models.classifier import CLASS_NAMES, TractorClassifier
 from src.models.multi_task import MultiTaskTractorClassifier
 
@@ -47,8 +48,8 @@ class TestMultiTaskClassifier:
     def test_model_initialization(self):
         """Тест инициализации модели."""
         model = MultiTaskTractorClassifier()
-        assert model.num_model_classes == 5
-        assert model.num_state_classes == 2
+        assert model.model_head.out_features == NUM_MODEL_CLASSES
+        assert model.state_head.out_features == NUM_STATE_CLASSES
 
     def test_forward_pass(self):
         """Тест прямого прохода."""
@@ -61,8 +62,8 @@ class TestMultiTaskClassifier:
         with torch.no_grad():
             model_logits, state_logits = model(x)
 
-        assert model_logits.shape == (batch_size, 5)
-        assert state_logits.shape == (batch_size, 2)
+        assert model_logits.shape == (batch_size, NUM_MODEL_CLASSES)
+        assert state_logits.shape == (batch_size, NUM_STATE_CLASSES)
 
     def test_feature_extraction(self):
         """Тест извлечения признаков."""
