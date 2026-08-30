@@ -46,9 +46,9 @@ from PIL import Image, UnidentifiedImageError
 from src.config.classes import MODEL_CLASSES
 
 # Ключевые слова для каждого класса. Первый элемент — «якорь», остальные
-# расширяют покрытие. Класс mtz_82 включает исторически слитый mtz_1221.
+# расширяют покрытие. Класс mtz_belarus покрывает и МТЗ-82, и МТЗ-1221.
 CLASS_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "chtz_b10m": (
+    "chtz": (
         "трактор ЧТЗ Б10М",
         "бульдозер Б10М",
         "ChTZ B10M bulldozer",
@@ -64,7 +64,7 @@ CLASS_KEYWORDS: dict[str, tuple[str, ...]] = {
         "John Deere tractor field",
         "зелёный трактор John Deere фото",
     ),
-    "kirovets_k744": (
+    "kirovets": (
         "трактор Кировец К-744",
         "Kirovets K-744",
         "трактор Кировец",
@@ -514,7 +514,7 @@ def collect_for_class(
     """Собрать изображения для одного класса модели трактора.
 
     Args:
-        model_class: Канонический класс (например, ``"mtz_82"``).
+        model_class: Канонический класс (например, ``"mtz_belarus"``).
         output_root: Корень дерева датасета (например, ``data/processed``).
         split: Имя сплита (``train``/``val``/``test``).
         per_class: Целевое число принятых изображений на класс.
