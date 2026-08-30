@@ -1,21 +1,24 @@
+"""Pydantic-схемы запросов и ответов API."""
+
+from __future__ import annotations
+
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
 
 class PredictionResponse(BaseModel):
+    """Ответ эндпоинта ``/predict``."""
 
-    model_class: str = Field(..., description="Название модели трактора")
-    confidence: float = Field(
-        ..., ge=0.0, le=1.0, description="Уверенность предсказания"
-    )
-    state: Optional[str] = Field(None, description="Состояние: clean/dirty")
-    processing_time: float = Field(..., description="Время обработки в секундах")
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    model_class: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    state: str | None = None
+    processing_time: float
+    timestamp: datetime
 
 
 class HealthResponse(BaseModel):
+    """Ответ эндпоинта ``/health``."""
 
     status: str = "healthy"
     version: str = "1.0.0"
@@ -23,8 +26,9 @@ class HealthResponse(BaseModel):
 
 
 class ModelInfo(BaseModel):
+    """Информация об одной загруженной модели для ``/models``."""
 
     name: str
     num_classes: int
     accuracy: float
-    weights_path: Optional[str] = None
+    weights_path: str | None = None

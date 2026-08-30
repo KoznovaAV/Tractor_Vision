@@ -1,22 +1,19 @@
-"""
-DataLoader для загрузки батчей изображений тракторов.
-"""
+"""Фабрика DataLoader для train/val/test сплитов."""
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
+import torch
 from torch.utils.data import DataLoader
 
+from src.config.config_loader import load_config
 from src.data.dataset import TractorDataset
-from src.data.transforms import DEFAULT_IMAGE_SIZE, get_train_transforms, get_val_transforms
+from src.data.transforms import get_train_transforms, get_val_transforms
 
-logger = logging.getLogger(__name__)
-
-DEFAULT_BATCH_SIZE = 16
-DEFAULT_NUM_WORKERS = 2
-TRAIN_SPLIT = "train"
+DEFAULT_BATCH_SIZE: int = 16
+DEFAULT_NUM_WORKERS: int = 2
+DEFAULT_IMAGE_SIZE: int = load_config().image_size
 
 
 def get_dataloader(
@@ -27,51 +24,30 @@ def get_dataloader(
     num_workers: int = DEFAULT_NUM_WORKERS,
     multi_task: bool = False,
 ) -> DataLoader:
-    """Создаёт DataLoader для заданного сплита.
+    """Создать DataLoader для указанного сплита.
 
     Args:
-        data_dir: Корневая директория датасета (содержит train/val/test).
-        split: Имя сплита (например, ``train``, ``val``, ``test``).
+        data_dir: Корень дерева датасета.
+        split: Имя сплита (``train``/``val``/``test``).
         batch_size: Размер батча.
-        image_size: Целевой размер изображения для трансформаций.
-        num_workers: Количество worker-процессов для загрузки данных.
-        multi_task: Если True, загружает метки состояния (clean/dirty).
+        image_size: Размер изображения.
+        num_workers: Число воркеров загрузки.
+        multi_task: Multi-task режим датасета.
 
     Returns:
-        Настроенный PyTorch DataLoader.
-
-    Raises:
-        FileNotFoundError: Если директория сплита не существует.
+        Настроенный DataLoader.
     """
-    split_dir = data_dir / split
-
-    if not split_dir.exists():
-        raise FileNotFoundError(f"Сплит '{split}' не найден: {split_dir}")
-
-    is_train = split == TRAIN_SPLIT
-    transform = (
-        get_train_transforms(image_size) if is_train else get_val_transforms(image_size)
-    )
-
+    is_train = split == "train"
+    transform = get_train_transforms(image_size) if is_train else get_val_transforms(image_size)
     dataset = TractorDataset(
-        root_dir=split_dir,
+        root_dir=Path(data_dir) / split,
         transform=transform,
         multi_task=multi_task,
     )
-
-    logger.info(
-        "DataLoader created: split=%s, batch_size=%d, samples=%d, multi_task=%s",
-        split,
-        batch_size,
-        len(dataset),
-        multi_task,
-    )
-
     return DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=is_train,
         num_workers=num_workers,
-        pin_memory=True,
-        drop_last=is_train,
+        pin_memory=torch.cuda.is_available(),
     )

@@ -1,168 +1,130 @@
-"""
-PyTorch Dataset для Multi-Task классификации тракторов.
-
-Структура: {split}/{model_class}/{clean|dirty}/image.jpg
-"""
+"""PyTorch Dataset для Multi-Task классификации тракторов."""
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, NamedTuple
 
 import numpy as np
 import torch
-from PIL import Image, UnidentifiedImageError
+from PIL import Image
 from torch.utils.data import Dataset
 
-logger = logging.getLogger(__name__)
+from src.config.classes import MODEL_CLASSES, STATE_CLASSES, class_to_idx, state_to_idx
 
-IMAGE_EXTENSIONS: frozenset[str] = frozenset({".jpg", ".jpeg", ".png", ".webp"})
-STATE_CLASSES: list[str] = ["clean", "dirty"]
-STATE_TO_IDX: dict[str, int] = {state: idx for idx, state in enumerate(STATE_CLASSES)}
+IMAGE_EXTENSIONS: frozenset[str] = frozenset({".jpg", ".jpeg", ".png", ".webp", ".bmp"})
 
-Sample = tuple[Path, int, Optional[int]]
+
+class Sample(NamedTuple):
+    """Один образец датасета."""
+
+    path: Path
+    model_label: int
+    state_label: int
 
 
 class TractorDataset(Dataset):
-    """Multi-Task датасет: модель трактора + состояние (clean/dirty).
+    """Multi-Task датасет: класс модели трактора + состояние (clean/dirty).
 
-    Args:
-        root_dir: Корневая директория сплита (содержит папки классов моделей).
-        transform: Опциональная функция трансформации (Albumentations Compose).
-        multi_task: Если True, загружает метки состояния из подпапок clean/dirty.
+    Классы модели итерируются ЯВНО из :data:`MODEL_CLASSES`, а не через glob
+    произвольных поддиректорий сплита. Это гарантирует, что служебные папки
+    (например, ``to_review``) не попадут в датасет как отдельный класс.
     """
 
     def __init__(
         self,
         root_dir: Path,
-        transform: Optional[Any] = None,
+        transform: Any | None = None,
         multi_task: bool = False,
     ) -> None:
+        """Инициализировать датасет.
+
+        Args:
+            root_dir: Корень сплита (например, ``data/dirty_clean/train``).
+            transform: Albumentations-трансформация (принимает ``image=``).
+            multi_task: Если ``True`` — ожидается уровень ``clean/dirty`` и
+                возвращается ``state_label``.
+        """
         self.root_dir = Path(root_dir)
         self.transform = transform
         self.multi_task = multi_task
-
-        if not self.root_dir.exists():
-            raise FileNotFoundError(f"Директория датасета не найдена: {self.root_dir}")
-        if not self.root_dir.is_dir():
-            raise NotADirectoryError(
-                f"Путь датасета должен быть директорией: {self.root_dir}"
-            )
-
-        self.model_classes: list[str] = sorted(
-            d.name for d in self.root_dir.iterdir() if d.is_dir()
-        )
-        if not self.model_classes:
-            logger.warning("В %s не найдено директорий классов моделей", self.root_dir)
-
-        self.model_to_idx: dict[str, int] = {
-            cls: idx for idx, cls in enumerate(self.model_classes)
-        }
-        self.samples: list[Sample] = self._load_samples()
-
-        logger.info(
-            "TractorDataset: %d samples, %d model classes, multi_task=%s",
-            len(self.samples),
-            len(self.model_classes),
-            self.multi_task,
-        )
+        self.samples = self._load_samples()
 
     @staticmethod
     def _is_image_file(path: Path) -> bool:
-        """Проверяет, является ли файл изображением.
+        """Проверить, является ли путь файлом-изображением.
 
         Args:
-            path: Путь к файлу.
+            path: Проверяемый путь.
 
         Returns:
-            True, если расширение файла входит в IMAGE_EXTENSIONS.
+            ``True`` для поддерживаемых расширений изображений.
         """
-        return path.suffix.lower() in IMAGE_EXTENSIONS
+        return path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
 
-    def _collect_images(self, directory: Path) -> list[Path]:
-        """Собирает все изображения из директории.
+    @classmethod
+    def _collect_images(cls, directory: Path) -> list[Path]:
+        """Собрать все изображения из директории (рекурсивно).
 
         Args:
-            directory: Директория с изображениями.
+            directory: Директория обхода.
 
         Returns:
-            Список путей к файлам изображений.
-
-        Raises:
-            NotADirectoryError: Если directory не является директорией.
+            Отсортированный список путей изображений.
         """
         if not directory.is_dir():
-            raise NotADirectoryError(
-                f"Ожидалась директория с изображениями: {directory}"
-            )
-        return [f for f in directory.iterdir() if self._is_image_file(f)]
+            return []
+        return sorted(p for p in directory.rglob("*") if cls._is_image_file(p))
 
     def _load_samples(self) -> list[Sample]:
-        """Собирает (путь, модель, состояние) для каждого изображения.
+        """Построить список образцов, итерируя классы явно из MODEL_CLASSES.
 
         Returns:
-            Список кортежей (путь_к_изображению, индекс_модели, индекс_состояния).
-            Для single-task индекс_состояния равен None.
+            Список :class:`Sample`.
         """
         samples: list[Sample] = []
-
-        for model_class in self.model_classes:
-            model_dir = self.root_dir / model_class
-            model_idx = self.model_to_idx[model_class]
+        for model_class in MODEL_CLASSES:
+            class_dir = self.root_dir / model_class
+            if not class_dir.is_dir():
+                continue
+            model_label = class_to_idx(model_class)
 
             if self.multi_task:
                 for state_class in STATE_CLASSES:
-                    state_dir = model_dir / state_class
-                    if not state_dir.exists():
-                        continue
-
-                    state_idx = STATE_TO_IDX[state_class]
-                    for img_path in self._collect_images(state_dir):
-                        samples.append((img_path, model_idx, state_idx))
+                    state_dir = class_dir / state_class
+                    state_label = state_to_idx(state_class)
+                    for image_path in self._collect_images(state_dir):
+                        samples.append(Sample(image_path, model_label, state_label))
             else:
-                for img_path in self._collect_images(model_dir):
-                    samples.append((img_path, model_idx, None))
-
+                # Single-task: состояние не используется, метка-заглушка 0.
+                for image_path in self._collect_images(class_dir):
+                    samples.append(Sample(image_path, model_label, 0))
         return samples
 
     def __len__(self) -> int:
-        """Возвращает количество образцов в датасете."""
+        """Вернуть число образцов."""
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor | np.ndarray]:
-        """Загружает и возвращает один образец по индексу.
+        """Вернуть образец по индексу.
 
         Args:
             idx: Индекс образца.
 
         Returns:
-            Словарь с ключами ``image``, ``model_label`` и опционально
+            Словарь с ключами ``image``, ``model_label`` и (для multi-task)
             ``state_label``.
-
-        Raises:
-            RuntimeError: Если изображение не удалось прочитать.
         """
-        img_path, model_idx, state_idx = self.samples[idx]
-
-        try:
-            image = Image.open(img_path).convert("RGB")
-        except (OSError, UnidentifiedImageError) as exc:
-            msg = f"Не удалось загрузить изображение: {img_path}"
-            logger.error(msg)
-            raise RuntimeError(msg) from exc
-
-        image_array = np.array(image)
+        sample = self.samples[idx]
+        image = np.array(Image.open(sample.path).convert("RGB"))
 
         if self.transform is not None:
-            image_array = self.transform(image=image_array)["image"]
+            image = self.transform(image=image)["image"]
 
-        result: dict[str, torch.Tensor | np.ndarray] = {
-            "image": image_array,
-            "model_label": torch.tensor(model_idx, dtype=torch.long),
+        item: dict[str, torch.Tensor | np.ndarray] = {
+            "image": image,
+            "model_label": torch.tensor(sample.model_label, dtype=torch.long),
         }
-
-        if self.multi_task and state_idx is not None:
-            result["state_label"] = torch.tensor(state_idx, dtype=torch.long)
-
-        return result
+        if self.multi_task:
+            item["state_label"] = torch.tensor(sample.state_label, dtype=torch.long)
+        return item

@@ -1,0 +1,38 @@
+# Tractor Vision — единый конфигурационный файл.
+#
+# Единственный источник для: размера изображения (train/eval/инференс), числа
+# классов, путей к данным и весам, параметров API и fallback-метрик. Хардкод
+# этих значений в коде запрещён (см. src/config/config_loader.py).
+#
+# Файл монтируется в api-контейнер (read-only) и копируется в образ.
+
+# Единый размер изображения для train, eval и инференса (px).
+image_size: 384
+
+# Число классов модели трактора. Должно совпадать с длиной MODEL_CLASSES
+# в src/config/classes.py.
+num_model_classes: 4
+num_state_classes: 2
+
+# Пути к данным (относительно корня проекта).
+data:
+  processed_dir: data/processed        # чистое дерево train/val/test по классам
+  dirty_clean_dir: data/dirty_clean     # multi-task дерево train/val/test (clean/dirty)
+  collected_dir: data/collected         # сырой сбор коллектора до prepare_dataset
+
+# Пути к весам.
+weights:
+  dir: weights
+  multi_task: weights/multi_task_best.ckpt
+
+# Параметры API.
+api:
+  max_file_size_mb: 10
+  allowed_extensions: [".jpg", ".jpeg", ".png"]
+  version: "1.0.0"
+
+# Fallback-метрики на случай, если в чекпоинте нет метаданных accuracy.
+# Основной источник — метаданные чекпоинта; эти значения используются, только
+# если чекпоинт их не содержит.
+fallback_accuracy:
+  multi_task: 1.0000
