@@ -1,34 +1,28 @@
 # Tractor Vision — единый конфигурационный файл.
 #
-# Устраняет хардкод и рассинхрон, разбросанный по коду:
-#   * image_size раньше был 384 в train и 224 в API — модель обучалась на 384,
-#     а инференс шёл на 224, что резало точность в проде. Теперь размер один и
-#     тот же везде (384) и читается отсюда.
-#   * пути к весам и данным были захардкожены в src/api/main.py.
-#   * num_classes был константой в нескольких модулях.
-#   * accuracy была захардкожена в API (0.9149 / 0.7917) и не обновлялась после
-#     переобучения — теперь читается из метаданных чекпоинта (см. config_loader).
+# Единственный источник для: размера изображения (train/eval/инференс), числа
+# классов, путей к данным и весам, параметров API и fallback-метрик. Хардкод
+# этих значений в коде запрещён (см. src/config/config_loader.py).
 #
 # Файл монтируется в api-контейнер (read-only) и копируется в образ.
 
 # Единый размер изображения для train, eval и инференса (px).
 image_size: 384
 
-# Число классов модели трактора после слияния mtz_1221 -> mtz_82.
-# Должно совпадать с длиной MODEL_CLASSES в src/config/classes.py.
+# Число классов модели трактора. Должно совпадать с длиной MODEL_CLASSES
+# в src/config/classes.py.
 num_model_classes: 4
 num_state_classes: 2
 
 # Пути к данным (относительно корня проекта).
 data:
-  processed_dir: data/processed        # single-task дерево (train/val/test)
+  processed_dir: data/processed        # дерево train/val/test по классам модели
   dirty_clean_dir: data/dirty_clean     # multi-task дерево (train/val)
   collected_dir: data/collected         # сырой сбор коллектора до prepare_dataset
 
 # Пути к весам.
 weights:
   dir: weights
-  single_task: weights/final_model.ckpt
   multi_task: weights/multi_task_best.ckpt
 
 # Параметры API.
@@ -41,5 +35,4 @@ api:
 # Основной источник — метаданные чекпоинта; эти значения используются, только
 # если чекпоинт их не содержит.
 fallback_accuracy:
-  single_task: null
   multi_task: 1.0000

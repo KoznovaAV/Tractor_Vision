@@ -1,9 +1,9 @@
 """Загрузка конфигурации проекта и метрик из метаданных чекпоинтов.
 
 Централизует чтение ``config.yaml`` (пути, ``image_size``, число классов) и
-извлечение accuracy из чекпоинтов Lightning вместо хардкода в API. Точность
-модели больше не «зашита» в код — она читается из ``hyper_parameters`` или
-кастомного ключа метаданных чекпоинта, куда её кладёт скрипт оценки.
+извлечение accuracy из чекпоинтов Lightning: точность читается из
+``hyper_parameters`` или кастомного ключа метаданных чекпоинта, куда её кладёт
+скрипт оценки, с fallback на значения из ``config.yaml``.
 
 Пример::
 
@@ -58,12 +58,10 @@ class WeightPaths:
 
     Attributes:
         dir: Директория весов.
-        single_task: Чекпоинт single-task модели.
         multi_task: Чекпоинт multi-task модели.
     """
 
     dir: Path
-    single_task: Path
     multi_task: Path
 
 
@@ -125,7 +123,6 @@ def _parse_config(raw: dict[str, Any]) -> AppConfig:
     )
     weights = WeightPaths(
         dir=Path(weights_raw["dir"]),
-        single_task=Path(weights_raw["single_task"]),
         multi_task=Path(weights_raw["multi_task"]),
     )
     api = ApiConfig(

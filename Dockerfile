@@ -1,22 +1,15 @@
 # syntax=docker/dockerfile:1
 #
-# Tractor Vision — образ для обучения, инференса и тестов.
+# Tractor Vision — образ для инференса и тестов.
 #
-# ИСПРАВЛЕНО (было противоречие): раньше образ жёстко ставил CPU-only torch
-# (--extra-index-url .../whl/cpu), а docker-compose при этом резервировал NVIDIA
-# GPU для train-сервисов. В результате на GPU-хосте контейнер всё равно считал
-# на CPU, а на CPU-хосте compose падал из-за отсутствия nvidia-драйвера.
-#
-# Теперь вариант PyTorch выбирается build-аргументом TORCH_VARIANT:
+# Обучение идёт локально в conda-окружении `tractor` и в Docker не выполняется,
+# поэтому образ CPU-only. Вариант PyTorch оставлен параметром на случай
+# отладочной GPU-сборки:
 #   * cpu   (по умолчанию) — колёса CPU-only, образ работает на любой машине;
-#   * cu121 — колёса CUDA 12.1 для GPU-обучения.
+#   * cu121 — колёса CUDA 12.1.
 #
 # Сборка CPU (по умолчанию):
 #   docker build -t tractor-vision:cpu .
-# Сборка GPU:
-#   docker build --build-arg TORCH_VARIANT=cu121 -t tractor-vision:gpu .
-#
-# docker-compose передаёт нужный вариант автоматически через профили cpu/gpu.
 
 FROM python:3.11-slim
 
@@ -53,6 +46,6 @@ COPY config.yaml ./config.yaml
 # Директории для артефактов (веса, данные, вывод оценки).
 RUN mkdir -p weights data output
 
-# Значение по умолчанию — обучение single-task. В compose переопределяется
-# на конкретную команду каждого сервиса.
-CMD ["python", "-m", "src.training.train"]
+# По умолчанию образ поднимает API-инференс. В compose команда при
+# необходимости переопределяется (например, на прогон тестов).
+CMD ["python", "-m", "src.api.main"]

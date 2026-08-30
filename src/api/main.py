@@ -1,18 +1,13 @@
 #!/usr/bin/env python3
 """FastAPI-приложение инференса Tractor Vision.
 
-Все параметры, ранее захардкоженные в этом модуле, вынесены в ``config.yaml`` и
-читаются через :mod:`src.config.config_loader`:
+Сервис поднимает единственную multi-task модель (семья трактора + состояние) и
+отдаёт эндпоинты ``/health``, ``/models``, ``/predict``.
 
-* ``image_size`` — единый размер (384) для train/eval/инференса; раньше здесь
-  было 224, что резало точность в проде;
-* пути к весам — из конфига, а не строковые литералы ``"weights/..."``;
-* ``version`` и ``max_file_size`` — из конфига;
-* accuracy моделей — через :func:`resolve_accuracy` (метаданные чекпоинта, иначе
-  fallback из конфига); хардкод ``0.9149`` / ``0.7917`` убран.
-
-Имена классов берутся из :mod:`src.config.classes`. Контракты эндпоинтов
-(``/health``, ``/models``, ``/predict``) и Pydantic-схемы не изменены.
+Параметры (``image_size``, пути к весам, ``version``, ``max_file_size``) берутся
+из ``config.yaml`` через :mod:`src.config.config_loader`; accuracy модели — из
+метаданных чекпоинта через :func:`resolve_accuracy` с fallback из конфига. Имена
+классов — из :mod:`src.config.classes`.
 """
 
 from __future__ import annotations
@@ -33,7 +28,6 @@ from src.api.schemas import HealthResponse, ModelInfo, PredictionResponse
 from src.config.classes import MODEL_CLASSES, STATE_CLASSES
 from src.config.config_loader import load_config, resolve_accuracy
 from src.data.transforms import get_val_transforms
-from src.models.classifier import TractorClassifier
 from src.models.multi_task import MultiTaskTractorClassifier
 
 # Конфигурация читается один раз при импорте модуля.
@@ -47,27 +41,8 @@ API_VERSION: str = _CONFIG.api.version
 # Валидационная трансформация на едином размере.
 transform = get_val_transforms(IMAGE_SIZE)
 
-# Глобальные ссылки на загруженные модели.
-single_task_model: TractorClassifier | None = None
+# Глобальная ссылка на загруженную модель.
 multi_task_model: MultiTaskTractorClassifier | None = None
-
-
-def _load_single_task() -> TractorClassifier | None:
-    """Загрузить single-task модель, если её чекпоинт существует.
-
-    Returns:
-        Модель в режиме eval либо ``None``, если веса недоступны.
-    """
-    path = _CONFIG.weights.single_task
-    if not Path(path).is_file():
-        return None
-    model = TractorClassifier(num_classes=len(MODEL_CLASSES))
-    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-    state_dict = checkpoint.get("state_dict", checkpoint)
-    cleaned = {k.removeprefix("model."): v for k, v in state_dict.items()}
-    model.load_state_dict(cleaned, strict=False)
-    model.eval()
-    return model
 
 
 def _load_multi_task() -> MultiTaskTractorClassifier | None:
@@ -101,11 +76,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     Yields:
         Управление на время жизни приложения.
     """
-    global single_task_model, multi_task_model
-    single_task_model = _load_single_task()
+    global multi_task_model
     multi_task_model = _load_multi_task()
     yield
-    single_task_model = None
     multi_task_model = None
 
 
@@ -119,7 +92,7 @@ async def health_check() -> HealthResponse:
     Returns:
         Статус сервиса, версия и флаг загруженности моделей.
     """
-    models_loaded = single_task_model is not None or multi_task_model is not None
+    models_loaded = multi_task_model is not None
     return HealthResponse(
         status="healthy",
         version=API_VERSION,
@@ -137,20 +110,6 @@ async def list_models() -> dict[str, Any]:
         Словарь с ключами ``models`` (список) и ``count`` (число).
     """
     models: list[ModelInfo] = []
-
-    if single_task_model is not None:
-        accuracy = resolve_accuracy(
-            _CONFIG.weights.single_task,
-            _CONFIG.fallback_accuracy.get("single_task"),
-        )
-        models.append(
-            ModelInfo(
-                name="Single-Task Classifier",
-                num_classes=len(MODEL_CLASSES),
-                accuracy=accuracy if accuracy is not None else 0.0,
-                weights_path=str(_CONFIG.weights.single_task),
-            )
-        )
 
     if multi_task_model is not None:
         accuracy = resolve_accuracy(
@@ -191,40 +150,29 @@ def _validate_upload(file: UploadFile) -> None:
 
 
 def _run_inference(input_tensor: torch.Tensor) -> tuple[str, float, str | None]:
-    """Выполнить инференс доступной моделью.
-
-    Приоритет у multi-task модели; при её отсутствии используется single-task.
+    """Выполнить инференс multi-task моделью.
 
     Args:
         input_tensor: Батч-тензор ``(1, 3, H, W)``.
 
     Returns:
-        Кортеж ``(model_class, confidence, state)``; ``state`` — ``None`` для
-        single-task модели.
+        Кортеж ``(model_class, confidence, state)``.
 
     Raises:
-        HTTPException: 500, если не загружено ни одной модели.
+        HTTPException: 500, если модель не загружена.
     """
-    if multi_task_model is not None:
-        model_logits, state_logits = multi_task_model(input_tensor)
-        model_probs = torch.softmax(model_logits, dim=1)
-        state_probs = torch.softmax(state_logits, dim=1)
-        model_idx = int(torch.argmax(model_probs, dim=1).item())
-        state_idx = int(torch.argmax(state_probs, dim=1).item())
-        model_class = MODEL_CLASSES[model_idx]
-        confidence = float(model_probs[0, model_idx].item())
-        state = STATE_CLASSES[state_idx]
-        return model_class, confidence, state
+    if multi_task_model is None:
+        raise HTTPException(status_code=500, detail="No models loaded")
 
-    if single_task_model is not None:
-        logits = single_task_model(input_tensor)
-        probs = torch.softmax(logits, dim=1)
-        model_idx = int(torch.argmax(probs, dim=1).item())
-        model_class = MODEL_CLASSES[model_idx]
-        confidence = float(probs[0, model_idx].item())
-        return model_class, confidence, None
-
-    raise HTTPException(status_code=500, detail="No models loaded")
+    model_logits, state_logits = multi_task_model(input_tensor)
+    model_probs = torch.softmax(model_logits, dim=1)
+    state_probs = torch.softmax(state_logits, dim=1)
+    model_idx = int(torch.argmax(model_probs, dim=1).item())
+    state_idx = int(torch.argmax(state_probs, dim=1).item())
+    model_class = MODEL_CLASSES[model_idx]
+    confidence = float(model_probs[0, model_idx].item())
+    state = STATE_CLASSES[state_idx]
+    return model_class, confidence, state
 
 
 @app.post("/predict", response_model=PredictionResponse)

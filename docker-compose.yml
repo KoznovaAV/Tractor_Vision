@@ -1,89 +1,24 @@
 # Tractor Vision — оркестрация сервисов.
 #
-# ИСПРАВЛЕНО (было противоречие): раньше train/train-multi безусловно
-# резервировали NVIDIA GPU (deploy.resources.reservations.devices), из-за чего
-# `docker compose up` падал на машине без nvidia-драйвера, хотя образ был
-# CPU-only. Теперь конфигурация разнесена по профилям:
+# Обучение вынесено из Docker (идёт локально в conda-окружении `tractor`),
+# поэтому compose содержит только рантайм-сервисы: API-инференс и прогон тестов.
+# Оба используют один CPU-образ.
 #
-#   * Профиль cpu (по умолчанию) — train/train-multi/api/test на CPU-образе,
-#     никаких GPU-резерваций. Работает на любой машине из коробки:
-#         docker compose --profile cpu up train
-#     (api и test не привязаны к профилю и доступны всегда.)
-#
-#   * Профиль gpu — те же обучающие сервисы, но образ собран с CUDA-колёсами
-#     (TORCH_VARIANT=cu121) и резервирует одну NVIDIA-карту. Требует
-#     nvidia-container-toolkit на хосте:
-#         docker compose --profile gpu up train-gpu
-#
-# Сервисы без profiles (api, test) поднимаются всегда:
 #     docker compose up api
+#     docker compose run --rm test
 #
 # Примечание: version-ключ намеренно опущён — в Compose v2 он устарел и
 # вызывает предупреждение.
 
-# --- Переиспользуемые фрагменты через YAML-якоря ---------------------------
-
-# Общие тома для обучающих сервисов.
-x-train-volumes: &train-volumes
-  - ./data:/app/data
-  - ./weights:/app/weights
-  - ./output:/app/output
-
-# Сборка CPU-варианта образа.
+# Сборка CPU-варианта образа (единственный вариант — GPU нужен только для
+# локального обучения, которое в Docker не выполняется).
 x-build-cpu: &build-cpu
   context: .
   args:
     TORCH_VARIANT: cpu
 
-# Сборка GPU-варианта образа (CUDA 12.1).
-x-build-gpu: &build-gpu
-  context: .
-  args:
-    TORCH_VARIANT: cu121
-
-# Блок резервирования NVIDIA GPU — только для gpu-профиля.
-x-gpu-deploy: &gpu-deploy
-  resources:
-    reservations:
-      devices:
-        - driver: nvidia
-          count: 1
-          capabilities: [gpu]
-
 services:
-  # ---- CPU-профиль: обучение на CPU (работает везде) ----------------------
-  train:
-    profiles: ["cpu"]
-    build: *build-cpu
-    image: tractor-vision:cpu
-    command: python -m src.training.train
-    volumes: *train-volumes
-
-  train-multi:
-    profiles: ["cpu"]
-    build: *build-cpu
-    image: tractor-vision:cpu
-    command: python -m src.training.multi_task_train
-    volumes: *train-volumes
-
-  # ---- GPU-профиль: то же обучение, но на CUDA-образе с резервом карты -----
-  train-gpu:
-    profiles: ["gpu"]
-    build: *build-gpu
-    image: tractor-vision:gpu
-    command: python -m src.training.train
-    volumes: *train-volumes
-    deploy: *gpu-deploy
-
-  train-multi-gpu:
-    profiles: ["gpu"]
-    build: *build-gpu
-    image: tractor-vision:gpu
-    command: python -m src.training.multi_task_train
-    volumes: *train-volumes
-    deploy: *gpu-deploy
-
-  # ---- API-сервис: CPU-инференс, доступен всегда (без профиля) -------------
+  # ---- API-сервис: CPU-инференс ------------------------------------------
   api:
     build: *build-cpu
     image: tractor-vision:cpu
@@ -107,7 +42,7 @@ services:
       retries: 3
       start_period: 40s
 
-  # ---- Тесты: CPU, доступны всегда (без профиля) --------------------------
+  # ---- Тесты: CPU -------------------------------------------------------
   test:
     build: *build-cpu
     image: tractor-vision:cpu
