@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Генерация реалистичного «грязного» датасета из чистых изображений.
 
-Прежняя синтетика сводилась к шуму/blur/яркости и не была похожа на реальную
-грязь, из-за чего голова clean/dirty плохо обобщалась на настоящие фото. Здесь
-грязь моделируется физически правдоподобно через компонуемые деградации:
+Грязь моделируется физически правдоподобно через компонуемые деградации, чтобы
+голова clean/dirty обобщалась на настоящие фото, а не только на шум/blur:
 
 * **Оверлеи грязи/брызг/пыли** — процедурные текстуры (мультиоктавный
   value-noise) с alpha-blending поверх изображения; грязь тёмная и локальная,
@@ -116,8 +115,7 @@ def apply_mud_overlay(rng: np.random.Generator, image: np.ndarray) -> np.ndarray
     height, width = image.shape[:2]
     noise = _value_noise(rng, (height, width), octaves=5)
 
-    # Порог отсекает часть площади — грязь покрывает не весь кадр.
-    # Диапазон чуть шире, чтобы пятна были крупнее.
+    # Порог оставляет часть площади чистой — грязь покрывает не весь кадр.
     threshold = rng.uniform(0.40, 0.60)
     mask = np.clip((noise - threshold) / (1.0 - threshold), 0.0, 1.0)
     mask *= rng.uniform(0.4, 0.85)  # общая интенсивность
@@ -268,7 +266,7 @@ def apply_fog(rng: np.random.Generator, image: np.ndarray) -> np.ndarray:
     """
     height, width = image.shape[:2]
     fog = _value_noise(rng, (height, width), octaves=2)
-    # Сглаживаем ещё сильнее — туман крупными пятнами.
+    # Сильное сглаживание — туман ложится крупными пятнами.
     fog = cv2.GaussianBlur(fog, (0, 0), sigmaX=min(height, width) * 0.05)
     fog = fog[..., None]
 

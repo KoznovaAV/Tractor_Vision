@@ -16,8 +16,8 @@ num_state_classes: 2
 
 # Пути к данным (относительно корня проекта).
 data:
-  processed_dir: data/processed        # дерево train/val/test по классам модели
-  dirty_clean_dir: data/dirty_clean     # multi-task дерево (train/val)
+  processed_dir: data/processed        # чистое дерево train/val/test по классам
+  dirty_clean_dir: data/dirty_clean     # multi-task дерево train/val/test (clean/dirty)
   collected_dir: data/collected         # сырой сбор коллектора до prepare_dataset
 
 # Пути к весам.

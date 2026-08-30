@@ -1,20 +1,18 @@
 """Единый источник правды по классам проекта Tractor Vision.
 
-Ранее список классов был задублирован в нескольких местах как `CLASS_NAMES`
-(`src/models/classifier.py`) и `MODEL_CLASSES` (`src/models/multi_task.py`),
-что приводило к рассинхрону при изменении набора классов. Теперь датасет, обе
-модели, API и тесты должны импортировать имена и индексы только отсюда.
+Датасет, модель, API и тесты импортируют имена классов и их индексы только
+отсюда. В проекте 4 класса модели трактора и 2 класса состояния (clean/dirty).
 
-После слияния `mtz_1221 -> mtz_82` в проекте остаётся 4 класса модели трактора.
-Порядок классов зафиксирован и является контрактом: индекс класса в этом
-списке соответствует индексу выходного логита головы модели. При изменении
-порядка или состава классов голова классификатора переобучается с нуля.
+Порядок классов зафиксирован и является контрактом: индекс класса в кортеже
+соответствует индексу выходного логита соответствующей головы модели. При
+изменении порядка или состава классов голова классификатора переобучается
+с нуля.
 
 Пример использования::
 
     from src.config.classes import MODEL_CLASSES, class_to_idx
 
-    idx = class_to_idx("mtz_82")  # -> 3
+    idx = class_to_idx("mtz_belarus")  # -> 3
 """
 
 from __future__ import annotations
@@ -34,16 +32,13 @@ STATE_CLASSES: Final[tuple[str, ...]] = ("clean", "dirty")
 NUM_STATE_CLASSES: Final[int] = len(STATE_CLASSES)
 
 # ---------------------------------------------------------------------------
-# Псевдонимы, сливаемые в канонический класс (для скрипта слияния и разметки).
+# Псевдонимы имён, сводимые к каноническому классу при разметке и сборе данных
+# (исторические имена моделей семейства МТЗ).
 # ---------------------------------------------------------------------------
 CLASS_ALIASES: Final[dict[str, str]] = {
     "mtz_1221": "mtz_belarus",
     "mtz_82": "mtz_belarus",
 }
-
-# Обратная совместимость: тот же кортеж, псевдоним, а не копия.
-CLASS_NAMES: Final[tuple[str, ...]] = MODEL_CLASSES
-NUM_CLASSES: Final[int] = NUM_MODEL_CLASSES
 
 _MODEL_CLASS_TO_IDX: Final[dict[str, int]] = {name: idx for idx, name in enumerate(MODEL_CLASSES)}
 _STATE_CLASS_TO_IDX: Final[dict[str, int]] = {name: idx for idx, name in enumerate(STATE_CLASSES)}
@@ -74,9 +69,7 @@ def state_to_idx(name: str) -> int:
 
 __all__ = [
     "CLASS_ALIASES",
-    "CLASS_NAMES",
     "MODEL_CLASSES",
-    "NUM_CLASSES",
     "NUM_MODEL_CLASSES",
     "NUM_STATE_CLASSES",
     "STATE_CLASSES",

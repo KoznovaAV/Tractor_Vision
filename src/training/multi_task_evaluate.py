@@ -8,7 +8,7 @@
 
 С флагом ``--out-dir`` дополнительно сохраняет ``confusion_matrix.png`` (матрица
 ошибок по классу техники) и ``misclassified_examples.png`` (сетка неверно
-классифицированных фото) — функционал бывшего ``scripts/eval_visualize.py``.
+классифицированных фото).
 """
 
 from __future__ import annotations

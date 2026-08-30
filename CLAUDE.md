@@ -27,7 +27,7 @@ FastAPI + PyTorch Lightning + ConvNeXt-Tiny (multi-task: 4 семьи + state).
 - `src/api/` — FastAPI (main.py, schemas.py)
 - `scripts/` — живые конвейеры (collect, prepare, generate, real-dirty цикл, demo)
 - `tests/` — тесты
-- `docs/` — документация (пока пусто)
+- `docs/` — ARCHITECTURE, MODEL_CARD, DATA, DEPLOYMENT, RETRAIN
 - `config.yaml` — единый конфиг
 
 ## Текущее состояние (31.08.2026)
@@ -44,13 +44,14 @@ FastAPI + PyTorch Lightning + ConvNeXt-Tiny (multi-task: 4 семьи + state).
 - История изменений живёт в git, а не в коде
 - Редактируешь файл — обновляй его docstring: без истории, только текущее поведение.
 
-## Текущие задачи (архитектурная чистка)
-1. Удалить мёртвый код:
-   - `src/models/classifier.py`, `src/training/train.py`, `src/training/evaluate.py` (single-task цепочка)
-   - `scripts/merge_mtz1221.py` (одноразовая миграция)
-   - `scripts/eval_visualize.py` (слить в multi_task_evaluate с флагом `--out-dir`)
-2. Почистить папки `data/` от рабочих лесов
-3. Создать документацию: `docs/ARCHITECTURE.md`, `MODEL_CARD.md`, `DATA.md`, `DEPLOYMENT.md`, `RETRAIN.md`
-4. Подготовить архитектуру к расширению (детали, подмодели через feedback)
-5. Пересобрать Docker-образ (CPU) с актуальным кодом и новым чекпоинтом
-6. Сохранить работоспособность: pytest зелёный, API работает, Docker запускается
+## Выполнено в Спеке 11
+- Удалён мёртвый single-task код (`classifier.py`, `train.py`, `evaluate.py`),
+  одноразовые миграции (`merge_mtz1221.py`); `eval_visualize` слит в
+  `multi_task_evaluate` (флаг `--out-dir`).
+- Общие утилиты: загрузчик чекпоинта (`src/models/loader.py`) и инференс
+  одного изображения (`src/models/predict.py`).
+- Канонические имена классов в источниках данных; Docker CMD по умолчанию — API.
+- README переписан под 4 класса и `image_size 384`; создан `docs/`
+  (ARCHITECTURE, MODEL_CARD, DATA, DEPLOYMENT, RETRAIN); удалён
+  `RETRAIN_CHECKLIST.md`.
+- Вычищены исторические комментарии; docstring описывает только текущее поведение.

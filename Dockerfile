@@ -3,13 +3,14 @@
 # Tractor Vision — образ для инференса и тестов.
 #
 # Обучение идёт локально в conda-окружении `tractor` и в Docker не выполняется,
-# поэтому образ CPU-only. Вариант PyTorch оставлен параметром на случай
-# отладочной GPU-сборки:
+# поэтому по умолчанию образ CPU-only. Вариант PyTorch задаётся build-arg
+# TORCH_VARIANT:
 #   * cpu   (по умолчанию) — колёса CPU-only, образ работает на любой машине;
-#   * cu121 — колёса CUDA 12.1.
+#   * cu121 — колёса CUDA 12.1 (GPU-инференс).
 #
-# Сборка CPU (по умолчанию):
+# Сборка:
 #   docker build -t tractor-vision:cpu .
+#   docker build --build-arg TORCH_VARIANT=cu121 -t tractor-vision:gpu .
 
 FROM python:3.11-slim
 

@@ -35,7 +35,7 @@ from src.models.predict import predict_image
 # Конфигурация читается один раз при импорте модуля.
 _CONFIG = load_config()
 
-IMAGE_SIZE: int = _CONFIG.image_size  # 384 — единый размер
+IMAGE_SIZE: int = _CONFIG.image_size
 MAX_FILE_SIZE: int = _CONFIG.api.max_file_size_bytes
 ALLOWED_EXTENSIONS: frozenset[str] = frozenset(_CONFIG.api.allowed_extensions)
 API_VERSION: str = _CONFIG.api.version

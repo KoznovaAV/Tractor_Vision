@@ -1,16 +1,16 @@
 """Загрузка конфигурации проекта и метрик из метаданных чекпоинтов.
 
 Централизует чтение ``config.yaml`` (пути, ``image_size``, число классов) и
-извлечение accuracy из чекпоинтов Lightning: точность читается из
-``hyper_parameters`` или кастомного ключа метаданных чекпоинта, куда её кладёт
-скрипт оценки, с fallback на значения из ``config.yaml``.
+извлечение accuracy из чекпоинтов Lightning: точность ищется в
+``hyper_parameters`` и в корне чекпоинта по набору известных ключей
+(:data:`_ACCURACY_KEYS`), с fallback на значения из ``config.yaml``.
 
 Пример::
 
     from src.config.config_loader import load_config, read_checkpoint_accuracy
 
     cfg = load_config()
-    size = cfg.image_size                      # 384 везде — train, eval, API
+    size = cfg.image_size                      # единый размер для train, eval, API
     acc = read_checkpoint_accuracy(cfg.weights.multi_task)  # из чекпоинта
 """
 
@@ -42,8 +42,8 @@ class DataPaths:
     """Пути к деревьям данных.
 
     Attributes:
-        processed_dir: Single-task дерево (train/val/test).
-        dirty_clean_dir: Multi-task дерево (train/val, уровень clean/dirty).
+        processed_dir: Дерево чистых изображений (train/val/test) по классам.
+        dirty_clean_dir: Multi-task дерево (train/val/test, уровень clean/dirty).
         collected_dir: Сырой сбор коллектора до prepare_dataset.
     """
 
