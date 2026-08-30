@@ -1,103 +1,79 @@
-"""
-Классификатор моделей тракторов на базе предобученной CNN.
+"""Single-Task классификатор моделей тракторов на базе ConvNeXt-Tiny.
 
-Использует transfer learning с частичной разморозкой ConvNeXt-Tiny.
+Число классов и их имена берутся ИСКЛЮЧИТЕЛЬНО из :mod:`src.config.classes`.
+Локальные ``CLASS_NAMES`` / ``NUM_CLASSES = 5`` удалены — они были источником
+рассинхрона (5 классов до слияния ``mtz_1221 -> mtz_82``). Теперь единственный
+источник правды — ``MODEL_CLASSES`` (4 класса).
 """
 
 from __future__ import annotations
-
-import logging
 
 import torch
 from torch import nn
 from torchvision.models import ConvNeXt_Tiny_Weights, convnext_tiny
 
-logger = logging.getLogger(__name__)
+from src.config.classes import NUM_MODEL_CLASSES
 
-CLASS_NAMES: list[str] = [
-    "chtz_b10m",
-    "johndeere",
-    "kirovets_k744",
-    "mtz_1221",
-    "mtz_82",
-]
-
-NUM_CLASSES = len(CLASS_NAMES)
-CLASSIFIER_HEAD_INDEX = 2
-NUM_UNFROZEN_STAGES = 0
+# Индекс слоя Linear внутри classifier-Sequential ConvNeXt-Tiny
+# (classifier = [LayerNorm2d, Flatten, Linear]).
+CLASSIFIER_HEAD_INDEX: int = 2
+# Число размороженных стадий backbone: 0 — полностью заморожен (single-task
+# базовая линия). Partial fine-tuning реализован в multi_task_train.
+NUM_UNFROZEN_STAGES: int = 0
+CONVNEXT_TINY_FEATURES: int = 768
 
 
 class TractorClassifier(nn.Module):
-    """Классификатор тракторов с переносом обучения.
+    """Классификатор тракторов с переносом обучения на ConvNeXt-Tiny."""
 
-    Args:
-        num_classes: Количество классов моделей тракторов.
-    """
+    def __init__(self, num_classes: int = NUM_MODEL_CLASSES) -> None:
+        """Инициализировать классификатор.
 
-    def __init__(self, num_classes: int = NUM_CLASSES) -> None:
+        Args:
+            num_classes: Число классов модели трактора. По умолчанию берётся из
+                :data:`src.config.classes.NUM_MODEL_CLASSES` (4 после слияния).
+        """
         super().__init__()
-
+        self.num_classes = num_classes
         self.backbone = self._create_backbone()
         self._freeze_backbone()
         self._replace_classifier(num_classes)
 
-        self.num_classes = num_classes
-
-        logger.info(
-            "TractorClassifier initialized: num_classes=%d, unfrozen_stages=%d",
-            num_classes,
-            NUM_UNFROZEN_STAGES,
-        )
-
     def _create_backbone(self) -> nn.Module:
-        """Создаёт предобученный ConvNeXt-Tiny.
+        """Создать предобученный ConvNeXt-Tiny backbone.
 
         Returns:
-            Модуль ConvNeXt-Tiny с весами ImageNet.
-
-        Raises:
-            RuntimeError: Если не удалось загрузить предобученные веса.
+            Backbone с оригинальной ImageNet-головой (заменяется далее).
         """
-        try:
-            return convnext_tiny(weights=ConvNeXt_Tiny_Weights.DEFAULT)
-        except Exception as exc:
-            msg = "Не удалось создать ConvNeXt-Tiny backbone с предобученными весами"
-            logger.error(msg)
-            raise RuntimeError(msg) from exc
+        weights = ConvNeXt_Tiny_Weights.DEFAULT
+        return convnext_tiny(weights=weights)
 
     def _freeze_backbone(self) -> None:
-        """Замораживает все слои, затем размораживает последние N стадий."""
+        """Заморозить все параметры backbone (feature-extraction режим)."""
         for param in self.backbone.parameters():
-            param.requires_grad = False
-
-        for param in self.backbone.features[-NUM_UNFROZEN_STAGES:].parameters():
-            param.requires_grad = True
+            param.requires_grad_(False)
 
     def _replace_classifier(self, num_classes: int) -> None:
-        """Заменяет последний слой классификатора на целевой.
+        """Заменить голову классификатора под нужное число классов.
+
+        Заменяется только слой Linear (индекс :data:`CLASSIFIER_HEAD_INDEX`),
+        LayerNorm2d и Flatten сохраняются. Новый слой обучаем.
 
         Args:
-            num_classes: Количество выходных классов.
-
-        Raises:
-            IndexError: Если структура classifier backbone не соответствует ожидаемой.
+            num_classes: Число выходных классов.
         """
-        try:
-            num_features = self.backbone.classifier[CLASSIFIER_HEAD_INDEX].in_features
-        except (IndexError, AttributeError) as exc:
-            msg = f"Не удалось получить in_features из classifier[{CLASSIFIER_HEAD_INDEX}]"
-            logger.error(msg)
-            raise IndexError(msg) from exc
-
-        self.backbone.classifier[CLASSIFIER_HEAD_INDEX] = nn.Linear(num_features, num_classes)
+        self.backbone.classifier[CLASSIFIER_HEAD_INDEX] = nn.Linear(
+            CONVNEXT_TINY_FEATURES, num_classes
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Выполняет прямой проход: изображение → логиты классов.
+        """Прямой проход.
 
         Args:
-            x: Батч изображений формы (B, C, H, W).
+            x: Батч изображений ``(B, 3, H, W)``.
 
         Returns:
-            Логиты формы (B, num_classes).
+            Логиты классов ``(B, num_classes)``.
         """
-        return self.backbone(x)
+        logits: torch.Tensor = self.backbone(x)
+        return logits

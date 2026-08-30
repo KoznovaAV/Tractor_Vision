@@ -193,3 +193,65 @@ Python 3.11, из корня проекта. GPU-обучение предпол
 - `to_review` вычищен до prepare_dataset.
 - Матрица ошибок 4×4, классы сбалансированы по сплитам.
 - Логи обучения: разморожены `features[4:8]`, backbone LR = 0.1 × heads LR.
+
+---
+
+## Фаза 6. Дообучение головы состояния на реальной грязи (артефакт 10)
+
+Отдельный цикл — когда классы уже распознаются хорошо (99%), но состояние
+проседает на реальной экстремальной грязи. Цель: dirty recall на held-out
+наборе реальной грязи ≥ 0.90.
+
+### 6a. Сбор реальных грязных фото
+
+```powershell
+python -m scripts.collect_dirty_tractors --output-dir data/real_dirty_raw --limit 300 --clip-threshold 0.7
+```
+
+Собирает по «грязным» запросам в `data/real_dirty_raw/unsorted/` с phash-дедупом
+и CLIP-фильтром «трактор ли это». Цель — 200+ принятых фото.
+
+### 6b. Псевдоразметка по классам
+
+```powershell
+python -m scripts.pseudo_label_dirty --input-dir data/real_dirty_raw/unsorted --output-dir data/real_dirty_labeled --threshold 0.8
+```
+
+Раскладывает по классам через `multi_task_best.ckpt` (уверенность ≥ 0.8 → класс,
+иначе → `to_review`). **Проверить `to_review` вручную**, перенести валидные фото
+в нужные классы.
+
+### 6c. Разбиение 80/20 (train-добавка + held-out val)
+
+```powershell
+python -m scripts.split_real_dirty --sources data/collected_dirty data/real_dirty_labeled --train-dir data/dirty_clean --val-dir data/real_dirty_val --val-ratio 0.2 --seed 42
+```
+
+80% → `data/dirty_clean/train/<class>/dirty/` с префиксом `real_` (вливаются в
+обучение), 20% → `data/real_dirty_val/<class>/` (held-out, вне обучения).
+
+### 6d. Baseline-оценка ДО дообучения
+
+```powershell
+python -m scripts.eval_real_dirty --val-dir data/real_dirty_val --checkpoint weights/multi_task_best.ckpt
+```
+
+Зафиксировать dirty recall до дообучения (ожидаемо низкий — ради этого всё).
+
+### 6e. Регенерация синтетики с mud_crust + дообучение
+
+```powershell
+python -m src.data.generate_dirty_dataset --clean-dir data/processed --output-dir data/dirty_clean --dirty-per-clean 2 --seed 42
+python -m src.training.multi_task_train --data-dir data/dirty_clean --num-unfrozen-stages 2 --loss-balancing uncertainty --image-size 384 --accelerator gpu
+```
+
+Новая деградация `mud_crust` (бежево-коричневая корка + десатурация) — мост к
+реальному илу. Реальные грязные фото из 6c уже лежат в train/dirty.
+
+### 6f. Оценка ПОСЛЕ дообучения
+
+```powershell
+python -m scripts.eval_real_dirty --val-dir data/real_dirty_val --checkpoint weights/multi_task_best.ckpt --target-recall 0.90
+```
+
+Код возврата 0 при dirty recall ≥ 0.90, иначе 2. Сравнить с baseline из 6d.

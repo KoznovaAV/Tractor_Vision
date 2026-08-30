@@ -1,4 +1,4 @@
-﻿# Tractor Vision — единый конфигурационный файл.
+# Tractor Vision — единый конфигурационный файл.
 #
 # Устраняет хардкод и рассинхрон, разбросанный по коду:
 #   * image_size раньше был 384 в train и 224 в API — модель обучалась на 384,
@@ -29,7 +29,7 @@ data:
 weights:
   dir: weights
   single_task: weights/final_model.ckpt
-  multi_task: weights/multi_task_final.ckpt
+  multi_task: weights/multi_task_best.ckpt
 
 # Параметры API.
 api:
@@ -42,4 +42,4 @@ api:
 # если чекпоинт их не содержит.
 fallback_accuracy:
   single_task: null
-  multi_task: null
+  multi_task: 1.0000

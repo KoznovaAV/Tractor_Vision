@@ -1,78 +1,45 @@
-"""Тесты для моделей."""
+"""Тесты single-task классификатора TractorClassifier.
+Классы и их число берутся из :mod:`src.config.classes` — локальный
+``CLASS_NAMES`` удалён вместе с хардкодом пяти классов.
+"""
+
+from __future__ import annotations
 
 import torch
 
-from src.config.classes import NUM_MODEL_CLASSES, NUM_STATE_CLASSES
-from src.models.classifier import CLASS_NAMES, TractorClassifier
-from src.models.multi_task import MultiTaskTractorClassifier
+from src.config.classes import MODEL_CLASSES, NUM_MODEL_CLASSES
+from src.models.classifier import CLASSIFIER_HEAD_INDEX, CONVNEXT_TINY_FEATURES, TractorClassifier
 
 
-class TestTractorClassifier:
-    """Тесты для Single-Task классификатора."""
-
-    def test_model_initialization(self):
-        """Тест инициализации модели."""
-        model = TractorClassifier(num_classes=len(CLASS_NAMES))
-        assert model.num_classes == len(CLASS_NAMES)
-
-    def test_forward_pass(self):
-        """Тест прямого прохода."""
-        model = TractorClassifier(num_classes=len(CLASS_NAMES))
-        model.eval()
-
-        batch_size = 2
-        x = torch.randn(batch_size, 3, 224, 224)
-
-        with torch.no_grad():
-            logits = model(x)
-
-        assert logits.shape == (batch_size, len(CLASS_NAMES))
-
-    def test_output_probabilities(self):
-        """Тест получения вероятностей."""
-        model = TractorClassifier(num_classes=len(CLASS_NAMES))
-        model.eval()
-
-        x = torch.randn(1, 3, 224, 224)
-
-        with torch.no_grad():
-            logits = model(x)
-            probs = torch.softmax(logits, dim=1)
-
-        assert torch.allclose(probs.sum(dim=1), torch.tensor(1.0), atol=1e-5)
+def test_num_classes_from_config() -> None:
+    """Число классов модели равно len(MODEL_CLASSES) из конфига."""
+    model = TractorClassifier()
+    assert model.num_classes == NUM_MODEL_CLASSES == len(MODEL_CLASSES)
 
 
-class TestMultiTaskClassifier:
-    """Тесты для Multi-Task классификатора."""
+def test_forward_output_shape() -> None:
+    """Логиты имеют форму (B, NUM_MODEL_CLASSES)."""
+    model = TractorClassifier()
+    logits = model(torch.randn(2, 3, 64, 64))
+    assert logits.shape == (2, NUM_MODEL_CLASSES)
 
-    def test_model_initialization(self):
-        """Тест инициализации модели."""
-        model = MultiTaskTractorClassifier()
-        assert model.model_head.out_features == NUM_MODEL_CLASSES
-        assert model.state_head.out_features == NUM_STATE_CLASSES
 
-    def test_forward_pass(self):
-        """Тест прямого прохода."""
-        model = MultiTaskTractorClassifier()
-        model.eval()
+def test_classifier_head_replaced() -> None:
+    """Голова заменена на Linear с нужным числом выходов и обучема."""
+    model = TractorClassifier()
+    head = model.backbone.classifier[CLASSIFIER_HEAD_INDEX]
+    assert isinstance(head, torch.nn.Linear)
+    assert head.in_features == CONVNEXT_TINY_FEATURES
+    assert head.out_features == NUM_MODEL_CLASSES
+    assert head.weight.requires_grad and head.bias.requires_grad
 
-        batch_size = 2
-        x = torch.randn(batch_size, 3, 224, 224)
 
-        with torch.no_grad():
-            model_logits, state_logits = model(x)
-
-        assert model_logits.shape == (batch_size, NUM_MODEL_CLASSES)
-        assert state_logits.shape == (batch_size, NUM_STATE_CLASSES)
-
-    def test_feature_extraction(self):
-        """Тест извлечения признаков."""
-        model = MultiTaskTractorClassifier()
-        model.eval()
-
-        x = torch.randn(1, 3, 224, 224)
-
-        with torch.no_grad():
-            features = model.backbone(x)
-
-        assert features.shape[1] == 768
+def test_backbone_frozen_except_head() -> None:
+    """Все параметры backbone заморожены, кроме заменённой головы."""
+    model = TractorClassifier()
+    head_ids = {id(p) for p in model.backbone.classifier[CLASSIFIER_HEAD_INDEX].parameters()}
+    for param in model.backbone.parameters():
+        if id(param) in head_ids:
+            assert param.requires_grad
+        else:
+            assert not param.requires_grad

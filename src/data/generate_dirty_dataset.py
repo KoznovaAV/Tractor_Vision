@@ -360,9 +360,63 @@ def apply_lighting(rng: np.random.Generator, image: np.ndarray) -> np.ndarray:
     return np.asarray(np.clip(result, 0.0, 1.0), dtype=np.float32)
 
 
-# Реестр деградаций с весами выбора. Грязевые эффекты приоритетнее погодных.
+def apply_mud_crust(rng: np.random.Generator, image: np.ndarray) -> np.ndarray:
+    """Корка засохшего ила: бежево-коричневое тонирование + десатурация + текстура.
+
+    Мост между лёгкой синтетикой (капли/пыль поверх чистого фото) и реальной
+    экстремальной грязью, где машина покрыта коркой ила с изменением и цвета, и
+    текстуры. В отличие от :func:`apply_mud_overlay` (локальные тёмные кляксы),
+    здесь моделируется сплошной налёт: нижняя и средняя части кадра тонируются
+    землистым цветом с высокой альфой, насыщенность снижается (грязь глушит
+    цвета), поверх накладывается крупная низкочастотная текстура корки.
+
+    Args:
+        rng: Генератор случайных чисел.
+        image: Изображение ``float32`` ``[0, 1]``, форма ``(H, W, 3)``.
+
+    Returns:
+        Изображение с коркой ила.
+    """
+    height, width = image.shape[:2]
+
+    # Вертикальный профиль покрытия: верх (небо) почти чист, середина частично,
+    # низ (ходовая, крылья) — под сплошной коркой.
+    coverage = np.clip(np.linspace(-0.2, 1.2, height, dtype=np.float32), 0.0, 1.0)
+    # Крупная текстура корки — низкочастотный шум, сглаженный сильным блюром.
+    texture = _value_noise(rng, (height, width), octaves=3)
+    texture = cv2.GaussianBlur(texture, (0, 0), sigmaX=min(height, width) * 0.03)
+    # Текстура модулирует альфу, чтобы корка была неоднородной (комки/проплешины).
+    texture_mod = 0.6 + 0.4 * texture
+
+    base_alpha = float(rng.uniform(0.4, 0.7))
+    alpha = coverage[:, None] * texture_mod * base_alpha
+    alpha_3 = alpha[..., None]
+
+    # Бежево-коричневый цвет засохшего ила с вариацией оттенка.
+    crust_color = np.array(
+        [
+            rng.uniform(0.42, 0.55),  # R — бежево-коричневый
+            rng.uniform(0.33, 0.44),  # G
+            rng.uniform(0.22, 0.32),  # B
+        ],
+        dtype=np.float32,
+    )
+
+    # Десатурация: подмешиваем яркость (grayscale) к исходнику там, где корка.
+    luminance = (image * np.array([0.299, 0.587, 0.114], dtype=np.float32)).sum(
+        axis=2, keepdims=True
+    )
+    desat_strength = coverage[:, None, None] * float(rng.uniform(0.3, 0.6))
+    desaturated = image * (1.0 - desat_strength) + luminance * desat_strength
+
+    # Накладываем землистый цвет корки поверх десатурированного изображения.
+    crusted = desaturated * (1.0 - alpha_3) + crust_color[None, None, :] * alpha_3
+    return np.asarray(np.clip(crusted, 0.0, 1.0), dtype=np.float32)
+
+
 DEGRADATIONS: dict[str, tuple[Degradation, float]] = {
     "mud": (apply_mud_overlay, 1.0),
+    "mud_crust": (apply_mud_crust, 1.0),
     "dust": (apply_dust_overlay, 0.8),
     "splatter": (apply_splatter, 0.9),
     "occlusion": (apply_occlusion, 0.7),
@@ -401,7 +455,7 @@ def build_pipeline(
     ]
 
     # Обязательно хотя бы один грязевой эффект.
-    dirt_effects = {"mud", "splatter", "occlusion"}
+    dirt_effects = {"mud", "mud_crust", "splatter", "occlusion"}
     if not dirt_effects.intersection(chosen):
         chosen[0] = str(rng.choice(list(dirt_effects)))
 

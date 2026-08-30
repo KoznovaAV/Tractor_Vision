@@ -24,12 +24,7 @@ from typing import Final
 # ---------------------------------------------------------------------------
 # Классы модели трактора. ПОРЯДОК ФИКСИРОВАН — контракт с весами головы.
 # ---------------------------------------------------------------------------
-MODEL_CLASSES: Final[tuple[str, ...]] = (
-    "chtz_b10m",
-    "johndeere",
-    "kirovets_k744",
-    "mtz_belarus",
-)
+MODEL_CLASSES = ("chtz", "johndeere", "kirovets", "mtz_belarus")
 NUM_MODEL_CLASSES: Final[int] = len(MODEL_CLASSES)
 
 # ---------------------------------------------------------------------------
