@@ -46,6 +46,7 @@ from torch import nn
 from torchmetrics import Accuracy
 
 from src.config.classes import NUM_MODEL_CLASSES, NUM_STATE_CLASSES
+from src.config.config_loader import load_config
 from src.data.dataloader import get_dataloader
 from src.models.multi_task import MultiTaskTractorClassifier
 
@@ -57,7 +58,7 @@ DEFAULT_LR: float = 5e-4
 BACKBONE_LR_FACTOR: float = 0.1  # backbone учится в 10 раз медленнее голов
 DEFAULT_BATCH_SIZE: int = 8
 DEFAULT_MAX_EPOCHS: int = 100
-DEFAULT_IMAGE_SIZE: int = 384
+DEFAULT_IMAGE_SIZE: int = load_config().image_size
 WEIGHT_DECAY: float = 1e-4
 LABEL_SMOOTHING: float = 0.1
 EARLY_STOPPING_PATIENCE: int = 15
@@ -456,7 +457,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Обучение Multi-Task модели с partial fine-tuning.",
     )
-    parser.add_argument("--data-dir", type=Path, default=Path("data/dirty_clean"))
+    parser.add_argument("--data-dir", type=Path, default=load_config().data.dirty_clean_dir)
     parser.add_argument("--weights-dir", type=Path, default=Path("weights"))
     parser.add_argument(
         "--num-unfrozen-stages",

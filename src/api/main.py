@@ -7,7 +7,8 @@
 Параметры (``image_size``, пути к весам, ``version``, ``max_file_size``) берутся
 из ``config.yaml`` через :mod:`src.config.config_loader`; accuracy модели — из
 метаданных чекпоинта через :func:`resolve_accuracy` с fallback из конфига. Имена
-классов — из :mod:`src.config.classes`.
+классов — из :mod:`src.config.classes`. Загрузка весов и инференс — общие утилиты
+из :mod:`src.models.loader` и :mod:`src.models.predict`.
 """
 
 from __future__ import annotations
@@ -20,7 +21,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import torch
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from PIL import Image
 
@@ -28,7 +28,9 @@ from src.api.schemas import HealthResponse, ModelInfo, PredictionResponse
 from src.config.classes import MODEL_CLASSES, STATE_CLASSES
 from src.config.config_loader import load_config, resolve_accuracy
 from src.data.transforms import get_val_transforms
+from src.models.loader import load_multi_task_model, resolve_working_checkpoint
 from src.models.multi_task import MultiTaskTractorClassifier
+from src.models.predict import predict_image
 
 # Конфигурация читается один раз при импорте модуля.
 _CONFIG = load_config()
@@ -46,24 +48,16 @@ multi_task_model: MultiTaskTractorClassifier | None = None
 
 
 def _load_multi_task() -> MultiTaskTractorClassifier | None:
-    """Загрузить multi-task модель, если её чекпоинт существует.
+    """Загрузить multi-task модель, если доступен рабочий чекпоинт.
 
     Returns:
         Модель в режиме eval либо ``None``, если веса недоступны.
     """
-    path = _CONFIG.weights.multi_task
-    if not Path(path).is_file():
+    try:
+        checkpoint_path = resolve_working_checkpoint()
+    except FileNotFoundError:
         return None
-    model = MultiTaskTractorClassifier(
-        num_model_classes=len(MODEL_CLASSES),
-        num_state_classes=len(STATE_CLASSES),
-    )
-    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-    state_dict = checkpoint.get("state_dict", checkpoint)
-    cleaned = {k.removeprefix("model."): v for k, v in state_dict.items()}
-    model.load_state_dict(cleaned, strict=False)
-    model.eval()
-    return model
+    return load_multi_task_model(checkpoint_path)
 
 
 @asynccontextmanager
@@ -149,11 +143,11 @@ def _validate_upload(file: UploadFile) -> None:
         )
 
 
-def _run_inference(input_tensor: torch.Tensor) -> tuple[str, float, str | None]:
+def _run_inference(image: Image.Image) -> tuple[str, float, str]:
     """Выполнить инференс multi-task моделью.
 
     Args:
-        input_tensor: Батч-тензор ``(1, 3, H, W)``.
+        image: Открытое изображение ``PIL.Image``.
 
     Returns:
         Кортеж ``(model_class, confidence, state)``.
@@ -164,15 +158,8 @@ def _run_inference(input_tensor: torch.Tensor) -> tuple[str, float, str | None]:
     if multi_task_model is None:
         raise HTTPException(status_code=500, detail="No models loaded")
 
-    model_logits, state_logits = multi_task_model(input_tensor)
-    model_probs = torch.softmax(model_logits, dim=1)
-    state_probs = torch.softmax(state_logits, dim=1)
-    model_idx = int(torch.argmax(model_probs, dim=1).item())
-    state_idx = int(torch.argmax(state_probs, dim=1).item())
-    model_class = MODEL_CLASSES[model_idx]
-    confidence = float(model_probs[0, model_idx].item())
-    state = STATE_CLASSES[state_idx]
-    return model_class, confidence, state
+    model_idx, confidence, state_idx = predict_image(multi_task_model, image, transform)
+    return MODEL_CLASSES[model_idx], confidence, STATE_CLASSES[state_idx]
 
 
 @app.post("/predict", response_model=PredictionResponse)
@@ -206,10 +193,7 @@ async def predict(file: UploadFile = File(...)) -> PredictionResponse:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Ошибка обработки изображения: {exc}") from exc
 
-    import numpy as np
-
-    tensor = transform(image=np.array(image))["image"].unsqueeze(0)
-    model_class, confidence, state = _run_inference(tensor)
+    model_class, confidence, state = _run_inference(image)
     processing_time = time.perf_counter() - start
 
     return PredictionResponse(

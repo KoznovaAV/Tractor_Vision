@@ -7,12 +7,13 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
+from src.config.config_loader import load_config
 from src.data.dataset import TractorDataset
 from src.data.transforms import get_train_transforms, get_val_transforms
 
 DEFAULT_BATCH_SIZE: int = 16
 DEFAULT_NUM_WORKERS: int = 2
-DEFAULT_IMAGE_SIZE: int = 384
+DEFAULT_IMAGE_SIZE: int = load_config().image_size
 
 
 def get_dataloader(

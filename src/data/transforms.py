@@ -1,15 +1,23 @@
-"""Albumentations-аугментации для тренировки и валидации."""
+"""Albumentations-аугментации для тренировки и валидации.
+
+Размер по умолчанию берётся из ``config.yaml`` (``image_size``) — единый для
+train, eval и инференса.
+"""
 
 from __future__ import annotations
 
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
+from src.config.config_loader import load_config
+
 IMAGENET_MEAN: tuple[float, float, float] = (0.485, 0.456, 0.406)
 IMAGENET_STD: tuple[float, float, float] = (0.229, 0.224, 0.225)
 
+DEFAULT_IMAGE_SIZE: int = load_config().image_size
 
-def get_train_transforms(image_size: int = 384) -> A.Compose:
+
+def get_train_transforms(image_size: int = DEFAULT_IMAGE_SIZE) -> A.Compose:
     """Аугментации для обучения.
 
     Args:
@@ -30,7 +38,7 @@ def get_train_transforms(image_size: int = 384) -> A.Compose:
     )
 
 
-def get_val_transforms(image_size: int = 384) -> A.Compose:
+def get_val_transforms(image_size: int = DEFAULT_IMAGE_SIZE) -> A.Compose:
     """Аугментации для валидации/инференса.
 
     Args:

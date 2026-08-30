@@ -25,14 +25,14 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import torch
 
-from scripts.pseudo_label_dirty import load_multi_task_model
 from src.config.classes import class_to_idx, state_to_idx
 from src.config.config_loader import load_config
 from src.data.transforms import get_val_transforms
+from src.models.loader import load_multi_task_model
 from src.models.multi_task import MultiTaskTractorClassifier
+from src.models.predict import predict_image
 
 IMAGE_EXTENSIONS: frozenset[str] = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 DIRTY_STATE: str = "dirty"
@@ -65,7 +65,6 @@ def evaluate(
     model: MultiTaskTractorClassifier,
     pairs: list[tuple[Path, str]],
     transform: Any,
-    device: torch.device,
 ) -> dict[str, Any]:
     """Прогнать модель по набору и посчитать метрики состояния и класса.
 
@@ -73,14 +72,11 @@ def evaluate(
         model: Multi-task модель в режиме eval.
         pairs: Пары ``(путь, класс)``.
         transform: Валидационная трансформация.
-        device: Устройство.
 
     Returns:
         Словарь метрик: ``dirty_recall``, ``model_accuracy``, счётчики и
         поклассовый dirty recall.
     """
-    from PIL import Image
-
     dirty_idx = state_to_idx(DIRTY_STATE)
     total = 0
     state_correct = 0  # предсказано dirty
@@ -88,22 +84,16 @@ def evaluate(
     per_class_total: dict[str, int] = defaultdict(int)
     per_class_dirty: dict[str, int] = defaultdict(int)
 
-    with torch.no_grad():
-        for image_path, class_name in pairs:
-            image = np.array(Image.open(image_path).convert("RGB"))
-            tensor = transform(image=image)["image"].unsqueeze(0).to(device)
-            model_logits, state_logits = model(tensor)
+    for image_path, class_name in pairs:
+        model_pred, _, state_pred = predict_image(model, image_path, transform)
 
-            state_pred = int(torch.argmax(state_logits, dim=1).item())
-            model_pred = int(torch.argmax(model_logits, dim=1).item())
-
-            total += 1
-            per_class_total[class_name] += 1
-            if state_pred == dirty_idx:
-                state_correct += 1
-                per_class_dirty[class_name] += 1
-            if model_pred == class_to_idx(class_name):
-                model_correct += 1
+        total += 1
+        per_class_total[class_name] += 1
+        if state_pred == dirty_idx:
+            state_correct += 1
+            per_class_dirty[class_name] += 1
+        if model_pred == class_to_idx(class_name):
+            model_correct += 1
 
     dirty_recall = state_correct / total if total else 0.0
     model_accuracy = model_correct / total if total else 0.0
@@ -170,17 +160,17 @@ def main(argv: list[str] | None = None) -> int:
         Код возврата процесса: 0 при достижении целевого recall, иначе 2.
     """
     args = parse_args(argv)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     pairs = _iter_val_images(args.val_dir)
     if not pairs:
         print(f"[ошибка] Нет изображений в {args.val_dir}")
         return 1
 
-    model = load_multi_task_model(args.checkpoint).to(device)
+    model = load_multi_task_model(args.checkpoint, device)
     transform = get_val_transforms(args.image_size)
 
-    results = evaluate(model, pairs, transform, device)
+    results = evaluate(model, pairs, transform)
 
     print("=" * 55)
     print(f"ОЦЕНКА НА РЕАЛЬНОЙ ГРЯЗИ ({args.val_dir})")

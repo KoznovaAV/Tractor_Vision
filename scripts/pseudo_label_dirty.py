@@ -29,55 +29,23 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import torch
 
-from src.config.classes import MODEL_CLASSES, STATE_CLASSES
+from src.config.classes import MODEL_CLASSES
 from src.config.config_loader import load_config
 from src.data.transforms import get_val_transforms
+from src.models.loader import load_multi_task_model
 from src.models.multi_task import MultiTaskTractorClassifier
+from src.models.predict import predict_image
 
 IMAGE_EXTENSIONS: frozenset[str] = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 REVIEW_SUBDIR: str = "to_review"
-
-
-def load_multi_task_model(
-    checkpoint_path: Path,
-) -> MultiTaskTractorClassifier:
-    """Загрузить multi-task модель из чекпоинта в режиме eval.
-
-    Поддерживает Lightning-чекпоинты (ключ ``state_dict`` с префиксом ``model.``)
-    и сырые ``state_dict``.
-
-    Args:
-        checkpoint_path: Путь к ``.ckpt``.
-
-    Returns:
-        Модель в режиме eval.
-
-    Raises:
-        FileNotFoundError: Если чекпоинт не найден.
-    """
-    if not checkpoint_path.is_file():
-        raise FileNotFoundError(f"Чекпоинт не найден: {checkpoint_path}")
-
-    model = MultiTaskTractorClassifier(
-        num_model_classes=len(MODEL_CLASSES),
-        num_state_classes=len(STATE_CLASSES),
-    )
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    state_dict = checkpoint.get("state_dict", checkpoint)
-    cleaned = {key.removeprefix("model."): value for key, value in state_dict.items()}
-    model.load_state_dict(cleaned, strict=False)
-    model.eval()
-    return model
 
 
 def predict_class(
     model: MultiTaskTractorClassifier,
     image_path: Path,
     transform: Any,
-    device: torch.device,
 ) -> tuple[str, float]:
     """Предсказать класс техники и уверенность для одного изображения.
 
@@ -85,21 +53,12 @@ def predict_class(
         model: Multi-task модель.
         image_path: Путь к изображению.
         transform: Валидационная трансформация.
-        device: Устройство.
 
     Returns:
         Кортеж ``(имя_класса, уверенность)``.
     """
-    from PIL import Image
-
-    image = np.array(Image.open(image_path).convert("RGB"))
-    tensor = transform(image=image)["image"].unsqueeze(0).to(device)
-    with torch.no_grad():
-        model_logits, _ = model(tensor)
-        probs = torch.softmax(model_logits, dim=1)
-        idx = int(torch.argmax(probs, dim=1).item())
-        confidence = float(probs[0, idx].item())
-    return MODEL_CLASSES[idx], confidence
+    model_idx, model_conf, _ = predict_image(model, image_path, transform)
+    return MODEL_CLASSES[model_idx], model_conf
 
 
 def _iter_images(input_dir: Path) -> list[Path]:
@@ -123,7 +82,6 @@ def pseudo_label(
     input_dir: Path,
     output_dir: Path,
     transform: Any,
-    device: torch.device,
     threshold: float,
 ) -> dict[str, int]:
     """Разложить изображения по классам согласно предсказанию с порогом.
@@ -136,7 +94,6 @@ def pseudo_label(
         input_dir: Директория с собранными фото.
         output_dir: Корень выходного дерева ``real_dirty_labeled``.
         transform: Валидационная трансформация.
-        device: Устройство.
         threshold: Порог уверенности для авто-раскладки.
 
     Returns:
@@ -146,7 +103,7 @@ def pseudo_label(
     counts[REVIEW_SUBDIR] = 0
 
     for image_path in _iter_images(input_dir):
-        model_class, confidence = predict_class(model, image_path, transform, device)
+        model_class, confidence = predict_class(model, image_path, transform)
         if confidence >= threshold:
             dest_dir = output_dir / model_class
             counts[model_class] += 1
@@ -219,9 +176,9 @@ def main(argv: list[str] | None = None) -> int:
         Код возврата процесса (0 — успех).
     """
     args = parse_args(argv)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    model = load_multi_task_model(args.checkpoint).to(device)
+    model = load_multi_task_model(args.checkpoint, device)
     transform = get_val_transforms(args.image_size)
 
     print(f"Модель: {args.checkpoint} | порог: {args.threshold}")
@@ -230,7 +187,6 @@ def main(argv: list[str] | None = None) -> int:
         input_dir=args.input_dir,
         output_dir=args.output_dir,
         transform=transform,
-        device=device,
         threshold=args.threshold,
     )
 
