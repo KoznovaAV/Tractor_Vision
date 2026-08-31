@@ -45,7 +45,13 @@ Thumbs.db
 # Project specific
 wandb/
 output/
-/data/
+/data/*
 /weights/
+
+# Плейсхолдер набора реальных чистых фото: структуру папок держим в git,
+# сами фото (их кладёт человек) — нет.
+!/data/real_clean_probe/
+/data/real_clean_probe/*
+!/data/real_clean_probe/.gitkeep
 
 lightning_logs/
