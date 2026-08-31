@@ -48,10 +48,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Чекпоинт: {checkpoint}")
 
     for path in iter_images(args.images):
-        model_idx, model_conf, state_idx = predict_image(model, path, transform)
+        model_idx, model_conf, state_idx, state_conf = predict_image(model, path, transform)
         print(f"\n{path.name}")
         print(f"  модель:     {MODEL_CLASSES[model_idx]} ({model_conf:.0%})")
-        print(f"  состояние:  {STATE_CLASSES[state_idx]}")
+        print(f"  состояние:  {STATE_CLASSES[state_idx]} ({state_conf:.0%})")
     return 0
 
 

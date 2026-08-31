@@ -25,13 +25,23 @@ def _img(path: Path) -> None:
 
 
 def _fake_predict(flip_names: set[str]):
-    """Фейковый ``predict_image``: (idx класса, conf, idx состояния)."""
+    """Фейковый ``predict_image``: (idx класса, conf, idx состояния, conf состояния)."""
 
     def predict(model, image_path, transform):
         name = Path(image_path).name
         true_state = "dirty" if "dirty" in name else "clean"
         pred = STATE_CLASSES[1 - state_to_idx(true_state)] if name in flip_names else true_state
-        return 0, 0.87, state_to_idx(pred)
+        return 0, 0.87, state_to_idx(pred), 0.91
+
+    return predict
+
+
+def _fake_predict_p_dirty(p_dirty_by_name: dict[str, float]):
+    """Фейковый ``predict_image`` с заданным ``p(dirty)`` на файл (для --sweep)."""
+
+    def predict(model, image_path, transform):
+        p_dirty = p_dirty_by_name[Path(image_path).name]
+        return 0, 0.87, state_to_idx("dirty"), p_dirty
 
     return predict
 
@@ -96,3 +106,30 @@ def test_main_writes_report_and_skips_empty_probe(
     assert "real_clean_probe" not in report["sources"]
     assert report["sources"]["real_dirty_val"]["dirty"]["dirty_recall"] == 1.0
     assert "пропущен" in capsys.readouterr().out
+
+
+def test_sweep_tabulates_and_recommends_threshold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_dirty = [
+        mod.Sample(mod.REAL_DIRTY_SOURCE, tmp_path / "d_lo.jpg", FAMILY, "dirty"),
+        mod.Sample(mod.REAL_DIRTY_SOURCE, tmp_path / "d_hi.jpg", FAMILY, "dirty"),
+    ]
+    syn_clean = [
+        mod.Sample(mod.SYNTHETIC_SOURCE, tmp_path / "c_lo.jpg", FAMILY, "clean"),
+        mod.Sample(mod.SYNTHETIC_SOURCE, tmp_path / "c_hi.jpg", FAMILY, "clean"),
+    ]
+    p_dirty = {"d_lo.jpg": 0.60, "d_hi.jpg": 0.95, "c_lo.jpg": 0.10, "c_hi.jpg": 0.70}
+    monkeypatch.setattr(mod, "predict_image", _fake_predict_p_dirty(p_dirty))
+
+    result = mod.sweep(
+        model=None, samples=real_dirty + syn_clean, transform=None, thresholds=(0.50, 0.70, 0.90)
+    )
+
+    by_t = {row["threshold"]: row for row in result["rows"]}
+    assert by_t[0.50]["real_dirty_recall"] == 1.0
+    assert by_t[0.50]["synthetic_clean_false_dirty"] == 0.5
+    assert by_t[0.70]["real_dirty_recall"] == 0.5
+    assert by_t[0.90]["probe_false_dirty"] is None
+    # recall >= 0.90 держится только при пороге 0.50.
+    assert result["recommended_threshold"] == 0.50

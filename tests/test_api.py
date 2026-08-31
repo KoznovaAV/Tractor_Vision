@@ -80,7 +80,7 @@ class TestPredictEndpoint:
         assert response.status_code in (200, 500)
 
     def test_predict_ok_has_review_fields(self, client: TestClient) -> None:
-        """При успехе присутствуют ``request_id`` и булев ``needs_review``."""
+        """При успехе присутствуют ``request_id``, ``needs_review`` и ``state_confidence``."""
         files = {"file": ("tractor.jpg", _make_image_bytes("JPEG"), "image/jpeg")}
         response = client.post("/predict", files=files)
         if response.status_code != 200:
@@ -88,6 +88,8 @@ class TestPredictEndpoint:
         body = response.json()
         assert isinstance(body["request_id"], str) and body["request_id"]
         assert isinstance(body["needs_review"], bool)
+        assert isinstance(body["state_confidence"], float)
+        assert 0.0 <= body["state_confidence"] <= 1.0
 
     def test_predict_with_invalid_extension(self, client: TestClient) -> None:
         """Недопустимое расширение файла: 422."""
@@ -106,6 +108,40 @@ class TestPredictEndpoint:
         files = {"file": ("tractor.png", _make_image_bytes("PNG"), "image/png")}
         response = client.post("/predict", files=files)
         assert response.status_code in (200, 500)
+
+
+class TestDecideState:
+    """Тесты решения по состоянию из порога ``api.state_dirty_threshold``."""
+
+    def test_threshold_from_config(self) -> None:
+        """Константа порога берётся из конфига, а не хардкодится."""
+        from src.config.config_loader import load_config
+
+        assert api_main.STATE_DIRTY_THRESHOLD == load_config().api.state_dirty_threshold
+
+    def test_p_dirty_at_or_above_threshold_is_dirty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``p(dirty) >= threshold`` -> dirty, уверенность равна ``p(dirty)``."""
+        monkeypatch.setattr(api_main, "STATE_DIRTY_THRESHOLD", 0.5)
+        # state_idx=1 (dirty), conf 0.80 -> p(dirty)=0.80
+        state, conf = api_main._decide_state(1, 0.80)
+        assert state == "dirty"
+        assert conf == pytest.approx(0.80)
+
+    def test_p_dirty_below_threshold_is_clean(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``p(dirty) < threshold`` -> clean, уверенность равна ``1 - p(dirty)``."""
+        monkeypatch.setattr(api_main, "STATE_DIRTY_THRESHOLD", 0.7)
+        # state_idx=1 (dirty) по argmax, conf 0.60 -> p(dirty)=0.60 < 0.7
+        state, conf = api_main._decide_state(1, 0.60)
+        assert state == "clean"
+        assert conf == pytest.approx(0.40)
+
+    def test_clean_argmax_recovers_p_dirty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """При argmax=clean ``p(dirty) = 1 - conf`` и может превысить порог."""
+        monkeypatch.setattr(api_main, "STATE_DIRTY_THRESHOLD", 0.4)
+        # state_idx=0 (clean), conf 0.55 -> p(dirty)=0.45 >= 0.4 -> dirty
+        state, conf = api_main._decide_state(0, 0.55)
+        assert state == "dirty"
+        assert conf == pytest.approx(0.45)
 
 
 class TestFeedbackEndpoint:

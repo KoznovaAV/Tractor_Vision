@@ -57,7 +57,7 @@ def predict_class(
     Returns:
         Кортеж ``(имя_класса, уверенность)``.
     """
-    model_idx, model_conf, _ = predict_image(model, image_path, transform)
+    model_idx, model_conf, _, _ = predict_image(model, image_path, transform)
     return MODEL_CLASSES[model_idx], model_conf
 
 

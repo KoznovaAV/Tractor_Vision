@@ -41,6 +41,11 @@ api:
   version: "1.0.0"
   # Порог уверенности: предсказание с confidence ниже помечается needs_review.
   confidence_threshold: 0.6
+  # Порог решения по состоянию: p(dirty) >= порога -> dirty, иначе clean.
+  # Значение подобрано sweep-ом scripts/error_analysis_state.py --sweep как
+  # максимальный порог, при котором dirty recall на real_dirty_val >= 0.90
+  # (0.55 -> recall 0.906; при 0.60 recall падает до 0.875).
+  state_dirty_threshold: 0.55
   # Куда /feedback складывает присланные пользователем фото и манифесты.
   feedback_dir: data/feedback
 

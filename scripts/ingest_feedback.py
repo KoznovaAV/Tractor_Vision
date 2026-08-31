@@ -219,7 +219,7 @@ def _load_state_predictor(image_size: int, checkpoint: Path | None) -> StatePred
     transform = get_val_transforms(image_size)
 
     def _predict(photo: Path) -> str:
-        _, _, state_idx = predict_image(model, photo, transform)
+        _, _, state_idx, _ = predict_image(model, photo, transform)
         return STATE_CLASSES[state_idx]
 
     return _predict

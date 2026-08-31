@@ -14,14 +14,22 @@
 в разрезе источников и классов; false-clean rate на грязных фото; dirty recall на
 ``data/real_dirty_val``. Промахи копируются в ``<out-dir>/clean_as_dirty/`` и
 ``<out-dir>/dirty_as_clean/`` под именем ``pred_<state>_conf<conf>_<исходное имя>``
-(``conf`` — уверенность головы класса, единственная, что отдаёт ``predict_image``).
-Полный отчёт пишется в ``<out-dir>/report.json``, сводная таблица — в stdout.
+(``conf`` — уверенность головы класса). Полный отчёт пишется в
+``<out-dir>/report.json``, сводная таблица — в stdout.
+
+Флаг ``--sweep`` вместо разбора промахов калибрует порог решения по состоянию:
+для порогов ``p(dirty)`` от 0.50 до 0.90 с шагом 0.05 печатается таблица
+``порог | dirty recall (real_dirty_val) | false-dirty (synthetic clean) |
+false-dirty (probe)`` и рекомендация — максимальный порог, при котором dirty
+recall на ``data/real_dirty_val`` не ниже 0.90. Результат также пишется в
+``<out-dir>/sweep.json``.
 
 Наборы ``data/`` и ``weights/`` только читаются, результат пишется в ``output/``.
 
 Пример::
 
     python scripts/error_analysis_state.py
+    python scripts/error_analysis_state.py --sweep
     python scripts/error_analysis_state.py \\
         --out-dir output/error_analysis \\
         --checkpoint weights/multi_task_best.ckpt
@@ -55,6 +63,12 @@ IMAGE_EXTENSIONS: frozenset[str] = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 SYNTHETIC_SOURCE: str = "synthetic"
 REAL_DIRTY_SOURCE: str = "real_dirty_val"
 REAL_CLEAN_SOURCE: str = "real_clean_probe"
+
+# Пороги решения p(dirty) для --sweep: 0.50..0.90 с шагом 0.05.
+SWEEP_THRESHOLDS: tuple[float, ...] = tuple(round(0.50 + 0.05 * i, 2) for i in range(9))
+
+# Целевой dirty recall на реальной грязи для рекомендации порога.
+TARGET_REAL_DIRTY_RECALL: float = 0.90
 
 
 class Sample(NamedTuple):
@@ -194,7 +208,7 @@ def analyze(
     }
 
     for sample in samples:
-        _, conf, state_idx = predict_image(model, sample.path, transform)
+        _, conf, state_idx, _ = predict_image(model, sample.path, transform)
         pred_state = STATE_CLASSES[state_idx]
 
         by_group[(sample.source, sample.true_state)][pred_state] += 1
@@ -241,6 +255,134 @@ def analyze(
         "totals": totals,
         "misses": misses,
     }
+
+
+def _p_dirty(state_idx: int, state_conf: float) -> float:
+    """Восстановить ``p(dirty)`` из argmax-состояния и его уверенности.
+
+    Голова состояния бинарна, поэтому уверенность argmax-класса однозначно задаёт
+    вероятность ``dirty``.
+
+    Args:
+        state_idx: Индекс состояния по argmax из ``predict_image``.
+        state_conf: Softmax-уверенность этого состояния.
+
+    Returns:
+        Вероятность класса ``dirty``.
+    """
+    dirty_idx = state_to_idx("dirty")
+    return state_conf if state_idx == dirty_idx else 1.0 - state_conf
+
+
+def _rate(values: list[float], threshold: float) -> float:
+    """Доля значений ``p(dirty)`` не ниже порога (частота решения ``dirty``)."""
+    if not values:
+        return 0.0
+    return sum(1 for value in values if value >= threshold) / len(values)
+
+
+def sweep(
+    model: MultiTaskTractorClassifier,
+    samples: list[Sample],
+    transform: Any,
+    thresholds: tuple[float, ...] = SWEEP_THRESHOLDS,
+) -> dict[str, Any]:
+    """Прогнать модель один раз и посчитать метрики состояния для набора порогов.
+
+    Для каждого порога ``p(dirty)`` считаются: dirty recall на
+    ``data/real_dirty_val``, false-dirty rate на синтетических чистых фото и
+    false-dirty rate на реальном чистом probe-наборе (если он не пуст).
+
+    Args:
+        model: Multi-task модель в режиме eval.
+        samples: Размеченные образцы из всех источников.
+        transform: Валидационная трансформация.
+        thresholds: Пороги решения ``p(dirty) >= порог -> dirty``.
+
+    Returns:
+        Словарь с ключами ``counts`` (размеры групп), ``rows`` (по строке на
+        порог) и ``recommended_threshold`` (максимальный порог, при котором
+        recall на реальной грязи не ниже :data:`TARGET_REAL_DIRTY_RECALL`, либо
+        ``None``).
+    """
+    real_dirty: list[float] = []
+    synthetic_clean: list[float] = []
+    probe: list[float] = []
+
+    for sample in samples:
+        _, _, state_idx, state_conf = predict_image(model, sample.path, transform)
+        p_dirty = _p_dirty(state_idx, state_conf)
+        if sample.source == REAL_DIRTY_SOURCE:
+            real_dirty.append(p_dirty)
+        elif sample.source == SYNTHETIC_SOURCE and sample.true_state == "clean":
+            synthetic_clean.append(p_dirty)
+        elif sample.source == REAL_CLEAN_SOURCE:
+            probe.append(p_dirty)
+
+    has_probe = bool(probe)
+    rows: list[dict[str, Any]] = []
+    for threshold in thresholds:
+        rows.append(
+            {
+                "threshold": threshold,
+                "real_dirty_recall": _rate(real_dirty, threshold),
+                "synthetic_clean_false_dirty": _rate(synthetic_clean, threshold),
+                "probe_false_dirty": _rate(probe, threshold) if has_probe else None,
+            }
+        )
+
+    passing = [
+        row["threshold"] for row in rows if row["real_dirty_recall"] >= TARGET_REAL_DIRTY_RECALL
+    ]
+    return {
+        "counts": {
+            REAL_DIRTY_SOURCE: len(real_dirty),
+            "synthetic_clean": len(synthetic_clean),
+            REAL_CLEAN_SOURCE: len(probe),
+        },
+        "target_real_dirty_recall": TARGET_REAL_DIRTY_RECALL,
+        "rows": rows,
+        "recommended_threshold": max(passing) if passing else None,
+    }
+
+
+def _print_sweep_table(result: dict[str, Any]) -> None:
+    """Напечатать таблицу sweep-а и рекомендацию порога в stdout."""
+    counts = result["counts"]
+    print("=" * 72)
+    print("SWEEP ПОРОГА РЕШЕНИЯ ПО СОСТОЯНИЮ (p(dirty) >= порог -> dirty)")
+    print("=" * 72)
+    print(
+        f"real_dirty_val: {counts[REAL_DIRTY_SOURCE]} | "
+        f"synthetic clean: {counts['synthetic_clean']} | "
+        f"probe: {counts[REAL_CLEAN_SOURCE]}"
+    )
+    print()
+    print(
+        f"{'порог':>6} | {'dirty recall (real)':>19} | "
+        f"{'false-dirty (syn clean)':>23} | {'false-dirty (probe)':>19}"
+    )
+    print("-" * 76)
+    for row in result["rows"]:
+        probe_cell = "—" if row["probe_false_dirty"] is None else f"{row['probe_false_dirty']:.4f}"
+        print(
+            f"{row['threshold']:>6.2f} | {row['real_dirty_recall']:>19.4f} | "
+            f"{row['synthetic_clean_false_dirty']:>23.4f} | {probe_cell:>19}"
+        )
+
+    target = result["target_real_dirty_recall"]
+    recommended = result["recommended_threshold"]
+    print()
+    if recommended is None:
+        print(
+            f"Рекомендация: нет порога с dirty recall (real) >= {target:.2f}; "
+            f"оставить минимальный {result['rows'][0]['threshold']:.2f}."
+        )
+    else:
+        print(
+            f"Рекомендация: state_dirty_threshold = {recommended:.2f} "
+            f"(максимальный порог с dirty recall (real) >= {target:.2f})."
+        )
 
 
 def _print_table(report: dict[str, Any]) -> None:
@@ -317,6 +459,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Чекпоинт multi-task модели (по умолчанию — рабочий из config.yaml).",
     )
     parser.add_argument(
+        "--sweep",
+        action="store_true",
+        help="Вместо разбора промахов калибровать порог p(dirty) (0.50..0.90, шаг 0.05).",
+    )
+    parser.add_argument(
         "--image-size",
         type=int,
         default=config.image_size,
@@ -370,6 +517,16 @@ def main(argv: list[str] | None = None) -> int:
 
     model = load_multi_task_model(checkpoint, device)
     transform = get_val_transforms(args.image_size)
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.sweep:
+        result = sweep(model, samples, transform)
+        result = {"checkpoint": str(checkpoint), "image_size": args.image_size, **result}
+        sweep_path = args.out_dir / "sweep.json"
+        sweep_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        _print_sweep_table(result)
+        print(f"\nОтчёт: {sweep_path}")
+        return 0
 
     report = analyze(model, samples, transform, args.out_dir)
     report = {"checkpoint": str(checkpoint), "image_size": args.image_size, **report}
