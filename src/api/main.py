@@ -2,7 +2,13 @@
 """FastAPI-приложение инференса Tractor Vision.
 
 Сервис поднимает единственную multi-task модель (семья трактора + состояние) и
-отдаёт эндпоинты ``/health``, ``/models``, ``/predict``.
+отдаёт эндпоинты ``/health``, ``/models``, ``/predict``, ``/feedback``.
+
+Каждый ответ ``/predict`` получает ``request_id`` (uuid4) и флаг ``needs_review``
+(уверенность ниже ``api.confidence_threshold``); строка предсказания дописывается
+в ``output/predictions.jsonl``. ``/feedback`` принимает присланное пользователем
+фото с исправленной семьёй (и опционально состоянием) и складывает его в
+``api.feedback_dir/<user_family>/`` рядом с JSON-манифестом.
 
 Набор моделей задаётся разделом ``models`` в ``config.yaml`` и разбирается в
 реестр (:mod:`src.models.registry`): ``lifespan`` грузит по записи реестра каждую
@@ -19,17 +25,19 @@
 from __future__ import annotations
 
 import io
+import json
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from PIL import Image
 
-from src.api.schemas import HealthResponse, ModelInfo, PredictionResponse
+from src.api.schemas import FeedbackResponse, HealthResponse, ModelInfo, PredictionResponse
 from src.config.classes import MODEL_CLASSES, STATE_CLASSES
 from src.config.config_loader import load_config, resolve_accuracy
 from src.data.transforms import get_val_transforms
@@ -48,6 +56,11 @@ IMAGE_SIZE: int = _CONFIG.image_size
 MAX_FILE_SIZE: int = _CONFIG.api.max_file_size_bytes
 ALLOWED_EXTENSIONS: frozenset[str] = frozenset(_CONFIG.api.allowed_extensions)
 API_VERSION: str = _CONFIG.api.version
+CONFIDENCE_THRESHOLD: float = _CONFIG.api.confidence_threshold
+FEEDBACK_DIR: Path = _CONFIG.api.feedback_dir
+
+# Журнал предсказаний: одна JSON-строка на запрос /predict.
+PREDICTIONS_LOG: Path = Path("output/predictions.jsonl")
 
 # Валидационная трансформация на едином размере.
 transform = get_val_transforms(IMAGE_SIZE)
@@ -177,6 +190,27 @@ def _run_inference(image: Image.Image, model_name: str) -> tuple[str, float, str
     return MODEL_CLASSES[model_idx], confidence, STATE_CLASSES[state_idx]
 
 
+def _log_prediction(request_id: str, family: str, state: str, confidence: float) -> None:
+    """Дописать строку предсказания в ``output/predictions.jsonl``.
+
+    Args:
+        request_id: Идентификатор запроса ``/predict``.
+        family: Предсказанная семья трактора.
+        state: Предсказанное состояние (clean/dirty).
+        confidence: Уверенность модели в семье.
+    """
+    PREDICTIONS_LOG.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "request_id": request_id,
+        "ts": datetime.now().isoformat(),
+        "family": family,
+        "state": state,
+        "confidence": confidence,
+    }
+    with PREDICTIONS_LOG.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(
     file: UploadFile = File(...),
@@ -189,7 +223,8 @@ async def predict(
         model: Имя модели из реестра; по умолчанию ``machine``.
 
     Returns:
-        Предсказание с классом модели, уверенностью, состоянием и таймингом.
+        Предсказание с классом модели, уверенностью, состоянием, таймингом,
+        идентификатором запроса и флагом ``needs_review``.
 
     Raises:
         HTTPException: 422 при невалидном/пустом/слишком большом файле или
@@ -216,13 +251,91 @@ async def predict(
     model_class, confidence, state = _run_inference(image, model)
     processing_time = time.perf_counter() - start
 
+    request_id = str(uuid4())
+    needs_review = confidence < CONFIDENCE_THRESHOLD
+    _log_prediction(request_id, model_class, state, confidence)
+
     return PredictionResponse(
         model_class=model_class,
         confidence=confidence,
         state=state,
         processing_time=processing_time,
         timestamp=datetime.now(),
+        request_id=request_id,
+        needs_review=needs_review,
     )
+
+
+@app.post("/feedback", response_model=FeedbackResponse)
+async def feedback(
+    file: UploadFile = File(...),
+    user_family: str = Form(...),
+    request_id: str | None = Form(default=None),
+    user_state: str | None = Form(default=None),
+) -> FeedbackResponse:
+    """Принять исправление пользователя и сохранить фото с манифестом.
+
+    Фото кладётся в ``api.feedback_dir/<user_family>/``; рядом пишется
+    JSON-манифест ``<имя>.json`` с полями ``request_id``, ``ts``,
+    ``user_family``, ``user_state`` и ``origin`` (``"user"``).
+
+    Args:
+        file: Загружаемое изображение (JPEG/PNG, максимум из конфига).
+        user_family: Правильная семья трактора; валидируется по ``MODEL_CLASSES``.
+        request_id: Идентификатор исходного запроса ``/predict`` (опционально).
+        user_state: Правильное состояние (clean/dirty), опционально; валидируется
+            по ``STATE_CLASSES``.
+
+    Returns:
+        Флаг сохранения и путь к сохранённому фото.
+
+    Raises:
+        HTTPException: 422 при невалидном расширении, неизвестной семье или
+            состоянии, пустом или слишком большом файле.
+    """
+    _validate_upload(file)
+
+    if user_family not in MODEL_CLASSES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Неизвестная семья: {user_family!r}. Доступны: {sorted(MODEL_CLASSES)}.",
+        )
+    if user_state is not None and user_state not in STATE_CLASSES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Неизвестное состояние: {user_state!r}. Доступны: {sorted(STATE_CLASSES)}.",
+        )
+
+    contents = await file.read()
+    if len(contents) == 0:
+        raise HTTPException(status_code=422, detail="Пустой файл.")
+    if len(contents) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Файл превышает лимит {MAX_FILE_SIZE} байт.",
+        )
+
+    target_dir = FEEDBACK_DIR / user_family
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    suffix = Path(file.filename or "").suffix.lower()
+    stem = request_id or uuid4().hex
+    photo_path = target_dir / f"{stem}{suffix}"
+    photo_path.write_bytes(contents)
+
+    manifest = {
+        "request_id": request_id,
+        "ts": datetime.now().isoformat(),
+        "user_family": user_family,
+        "user_state": user_state,
+        "origin": "user",
+    }
+    photo_path.with_suffix(".json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    return FeedbackResponse(saved=True, path=str(photo_path))
 
 
 if __name__ == "__main__":

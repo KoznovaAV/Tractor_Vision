@@ -39,6 +39,10 @@ api:
   max_file_size_mb: 10
   allowed_extensions: [".jpg", ".jpeg", ".png"]
   version: "1.0.0"
+  # Порог уверенности: предсказание с confidence ниже помечается needs_review.
+  confidence_threshold: 0.6
+  # Куда /feedback складывает присланные пользователем фото и манифесты.
+  feedback_dir: data/feedback
 
 # Fallback-метрики на случай, если в чекпоинте нет метаданных accuracy.
 # Основной источник — метаданные чекпоинта; эти значения используются, только

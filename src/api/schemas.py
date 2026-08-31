@@ -15,6 +15,15 @@ class PredictionResponse(BaseModel):
     state: str | None = None
     processing_time: float
     timestamp: datetime
+    request_id: str
+    needs_review: bool
+
+
+class FeedbackResponse(BaseModel):
+    """Ответ эндпоинта ``/feedback``."""
+
+    saved: bool
+    path: str
 
 
 class HealthResponse(BaseModel):

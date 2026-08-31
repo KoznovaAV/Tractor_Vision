@@ -91,11 +91,16 @@ class ApiConfig:
         max_file_size_bytes: Максимальный размер загружаемого файла в байтах.
         allowed_extensions: Разрешённые расширения изображений.
         version: Версия сервиса.
+        confidence_threshold: Порог уверенности; ниже него предсказание
+            помечается флагом ``needs_review``.
+        feedback_dir: Директория, куда ``/feedback`` сохраняет фото и манифесты.
     """
 
     max_file_size_bytes: int
     allowed_extensions: tuple[str, ...]
     version: str
+    confidence_threshold: float
+    feedback_dir: Path
 
 
 @dataclass(frozen=True)
@@ -158,6 +163,8 @@ def _parse_config(raw: dict[str, Any]) -> AppConfig:
         max_file_size_bytes=int(api_raw["max_file_size_mb"]) * 1024 * 1024,
         allowed_extensions=tuple(api_raw["allowed_extensions"]),
         version=str(api_raw["version"]),
+        confidence_threshold=float(api_raw["confidence_threshold"]),
+        feedback_dir=Path(api_raw["feedback_dir"]),
     )
     return AppConfig(
         image_size=int(raw["image_size"]),
