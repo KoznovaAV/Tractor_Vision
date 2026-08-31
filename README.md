@@ -36,12 +36,17 @@ Multi-task компьютерное зрение для аудита парка 
 |---------|----------|
 | Accuracy семьи трактора, val | **1.000** |
 | Accuracy состояния clean/dirty, val | **0.942** |
-| Dirty recall на реальной грязи (held-out `data/real_dirty_val`) | **0.906** (цель ≥ 0.90) |
+| Dirty recall на реальной грязи (held-out `data/real_dirty_val`, 28 фото) | **0.893** (цель ≥ 0.90) |
+| False-dirty на реальном probe (`data/real_clean_probe`, 19 фото) | **0.158** (`kirovets` 0.300) |
+| Синтетика (`data/dirty_clean/test`) | clean false-dirty **0.080**, dirty recall **0.971** |
 | Порог `needs_review` в `/predict` | `confidence < 0.6` → ответ помечается на ручную проверку |
-| Порог состояния `api.state_dirty_threshold` | `p(dirty) >= 0.55` → `dirty` (калибровка `error_analysis_state.py --sweep`) |
+| Порог состояния `api.state_dirty_threshold` | `p(dirty) >= 0.60` → `dirty` (калибровка `error_analysis_state.py --sweep`) |
 
-Val-метрики — на синтетической грязи `data/dirty_clean/val`. Подробности,
-ограничения и версия чекпоинта — [docs/MODEL_CARD.md](docs/MODEL_CARD.md).
+Val-метрики — на синтетической грязи `data/dirty_clean/val`. Наборы реальной
+грязи и probe пересобраны после чистки данных (удалены снег и мусорные кадры);
+отставание dirty recall от цели 0.90 — 1 фото из 28, в пределах шума малой
+выборки. Подробности, ограничения и версия чекпоинта —
+[docs/MODEL_CARD.md](docs/MODEL_CARD.md).
 
 ## Быстрый старт
 
