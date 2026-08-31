@@ -14,6 +14,12 @@
   * ``gradnorm`` — динамическая нормировка градиентов по Chen et al. (2018)
     с целевым выравниванием скоростей обучения задач.
 
+* **Тёплый старт**: ``--init-checkpoint`` загружает веса модели из готового
+  ``.ckpt`` перед обучением — той же логикой, что
+  :func:`src.models.loader.load_multi_task_model` (снятие Lightning-префикса
+  ``model.``, отбрасывание параметров балансировки ``log_var_*``/``task_weights``).
+  Параметры балансировки текущего запуска при этом стартуют с нуля.
+
 Разморозка стадий выполняется снаружи через публичную структуру
 ``model.backbone.features``, поэтому сам ``MultiTaskTractorClassifier`` не
 меняется.
@@ -45,6 +51,7 @@ from torchmetrics import Accuracy
 from src.config.classes import NUM_MODEL_CLASSES, NUM_STATE_CLASSES
 from src.config.config_loader import load_config
 from src.data.dataloader import get_dataloader
+from src.models.loader import load_multi_task_model
 from src.models.multi_task import MultiTaskTractorClassifier
 
 # Индексы стадий-блоков в torchvision ConvNeXt-Tiny ``features`` (0..7).
@@ -457,6 +464,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--data-dir", type=Path, default=load_config().data.dirty_clean_dir)
     parser.add_argument("--weights-dir", type=Path, default=Path("weights"))
     parser.add_argument(
+        "--init-checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Готовый .ckpt для тёплого старта: веса модели грузятся логикой "
+            "load_multi_task_model (log_var_*/task_weights отбрасываются)."
+        ),
+    )
+    parser.add_argument(
         "--num-unfrozen-stages",
         type=int,
         default=2,
@@ -474,6 +490,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--image-size", type=int, default=DEFAULT_IMAGE_SIZE)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=EARLY_STOPPING_PATIENCE,
+        help="Терпение EarlyStopping по val_model_acc (эпохи).",
+    )
+    parser.add_argument(
         "--accelerator",
         type=str,
         default="auto",
@@ -482,11 +504,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def create_callbacks(weights_dir: Path) -> list[pl.Callback]:
+def create_callbacks(
+    weights_dir: Path, early_stopping_patience: int = EARLY_STOPPING_PATIENCE
+) -> list[pl.Callback]:
     """Создать колбэки обучения.
 
     Args:
         weights_dir: Директория для сохранения чекпоинтов.
+        early_stopping_patience: Терпение EarlyStopping по ``val_model_acc``.
 
     Returns:
         Список колбэков Lightning.
@@ -502,7 +527,7 @@ def create_callbacks(weights_dir: Path) -> list[pl.Callback]:
         ),
         EarlyStopping(
             monitor="val_model_acc",
-            patience=EARLY_STOPPING_PATIENCE,
+            patience=early_stopping_patience,
             mode="max",
             verbose=True,
         ),
@@ -544,6 +569,10 @@ def main(argv: list[str] | None = None) -> int:
         lr=args.lr,
         loss_balancing=args.loss_balancing,
     )
+    if args.init_checkpoint is not None:
+        pretrained = load_multi_task_model(args.init_checkpoint, device="cpu")
+        module.model.load_state_dict(pretrained.state_dict(), strict=True)
+        print(f"Тёплый старт: веса модели загружены из {args.init_checkpoint}")
     print(
         f"Разморожены стадии backbone (features): {module.unfrozen_indices} | "
         f"балансировка: {args.loss_balancing}"
@@ -552,7 +581,7 @@ def main(argv: list[str] | None = None) -> int:
     trainer = pl.Trainer(
         max_epochs=args.max_epochs,
         accelerator=args.accelerator,
-        callbacks=create_callbacks(args.weights_dir),
+        callbacks=create_callbacks(args.weights_dir, args.early_stopping_patience),
         log_every_n_steps=10,
     )
     trainer.fit(module, train_loader, val_loader)
