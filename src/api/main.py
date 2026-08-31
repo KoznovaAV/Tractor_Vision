@@ -4,9 +4,11 @@
 Сервис поднимает единственную multi-task модель (семья трактора + состояние) и
 отдаёт эндпоинты ``/health``, ``/models``, ``/predict``, ``/feedback``.
 
-Каждый ответ ``/predict`` получает ``request_id`` (uuid4) и флаг ``needs_review``
-(уверенность ниже ``api.confidence_threshold``); строка предсказания дописывается
-в ``output/predictions.jsonl``. ``/feedback`` принимает присланное пользователем
+Каждый ответ ``/predict`` получает ``request_id`` (uuid4), флаг ``needs_review``
+(уверенность ниже ``api.confidence_threshold``) и ``state_confidence`` —
+уверенность в состоянии, решённом по порогу ``api.state_dirty_threshold``
+(``p(dirty)`` не ниже порога -> ``dirty``); строка предсказания дописывается в
+``output/predictions.jsonl``. ``/feedback`` принимает присланное пользователем
 фото с исправленной семьёй (и опционально состоянием) и складывает его в
 ``api.feedback_dir/<user_family>/`` рядом с JSON-манифестом.
 
@@ -38,7 +40,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from PIL import Image
 
 from src.api.schemas import FeedbackResponse, HealthResponse, ModelInfo, PredictionResponse
-from src.config.classes import MODEL_CLASSES, STATE_CLASSES
+from src.config.classes import MODEL_CLASSES, STATE_CLASSES, state_to_idx
 from src.config.config_loader import load_config, resolve_accuracy
 from src.data.transforms import get_val_transforms
 from src.models.multi_task import MultiTaskTractorClassifier
@@ -57,6 +59,7 @@ MAX_FILE_SIZE: int = _CONFIG.api.max_file_size_bytes
 ALLOWED_EXTENSIONS: frozenset[str] = frozenset(_CONFIG.api.allowed_extensions)
 API_VERSION: str = _CONFIG.api.version
 CONFIDENCE_THRESHOLD: float = _CONFIG.api.confidence_threshold
+STATE_DIRTY_THRESHOLD: float = _CONFIG.api.state_dirty_threshold
 FEEDBACK_DIR: Path = _CONFIG.api.feedback_dir
 
 # Журнал предсказаний: одна JSON-строка на запрос /predict.
@@ -162,7 +165,29 @@ def _validate_upload(file: UploadFile) -> None:
         )
 
 
-def _run_inference(image: Image.Image, model_name: str) -> tuple[str, float, str]:
+def _decide_state(state_idx: int, state_conf: float) -> tuple[str, float]:
+    """Решить состояние по порогу ``api.state_dirty_threshold``.
+
+    Голова состояния бинарна (clean/dirty), поэтому ``p(dirty)`` восстанавливается
+    из уверенности argmax-состояния. Состояние — ``dirty``, если ``p(dirty)`` не
+    ниже порога, иначе ``clean``.
+
+    Args:
+        state_idx: Индекс состояния по argmax из ``predict_image``.
+        state_conf: Softmax-уверенность этого состояния.
+
+    Returns:
+        Кортеж ``(state, state_confidence)``: имя решённого состояния и его
+        уверенность (``p(dirty)`` для ``dirty``, ``1 - p(dirty)`` для ``clean``).
+    """
+    dirty_idx = state_to_idx("dirty")
+    p_dirty = state_conf if state_idx == dirty_idx else 1.0 - state_conf
+    if p_dirty >= STATE_DIRTY_THRESHOLD:
+        return "dirty", p_dirty
+    return "clean", 1.0 - p_dirty
+
+
+def _run_inference(image: Image.Image, model_name: str) -> tuple[str, float, str, float]:
     """Выполнить инференс моделью реестра по имени.
 
     Args:
@@ -170,7 +195,7 @@ def _run_inference(image: Image.Image, model_name: str) -> tuple[str, float, str
         model_name: Имя записи реестра (параметр ``?model=``).
 
     Returns:
-        Кортеж ``(model_class, confidence, state)``.
+        Кортеж ``(model_class, confidence, state, state_confidence)``.
 
     Raises:
         HTTPException: 422, если модель не значится в реестре; 500, если модель
@@ -186,11 +211,18 @@ def _run_inference(image: Image.Image, model_name: str) -> tuple[str, float, str
     if model is None:
         raise HTTPException(status_code=500, detail="No models loaded")
 
-    model_idx, confidence, state_idx = predict_image(model, image, transform)
-    return MODEL_CLASSES[model_idx], confidence, STATE_CLASSES[state_idx]
+    model_idx, confidence, state_idx, state_conf = predict_image(model, image, transform)
+    state, state_confidence = _decide_state(state_idx, state_conf)
+    return MODEL_CLASSES[model_idx], confidence, state, state_confidence
 
 
-def _log_prediction(request_id: str, family: str, state: str, confidence: float) -> None:
+def _log_prediction(
+    request_id: str,
+    family: str,
+    state: str,
+    confidence: float,
+    state_confidence: float,
+) -> None:
     """Дописать строку предсказания в ``output/predictions.jsonl``.
 
     Args:
@@ -198,6 +230,7 @@ def _log_prediction(request_id: str, family: str, state: str, confidence: float)
         family: Предсказанная семья трактора.
         state: Предсказанное состояние (clean/dirty).
         confidence: Уверенность модели в семье.
+        state_confidence: Уверенность в решённом состоянии.
     """
     PREDICTIONS_LOG.parent.mkdir(parents=True, exist_ok=True)
     record = {
@@ -206,6 +239,7 @@ def _log_prediction(request_id: str, family: str, state: str, confidence: float)
         "family": family,
         "state": state,
         "confidence": confidence,
+        "state_confidence": state_confidence,
     }
     with PREDICTIONS_LOG.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -248,17 +282,18 @@ async def predict(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Ошибка обработки изображения: {exc}") from exc
 
-    model_class, confidence, state = _run_inference(image, model)
+    model_class, confidence, state, state_confidence = _run_inference(image, model)
     processing_time = time.perf_counter() - start
 
     request_id = str(uuid4())
     needs_review = confidence < CONFIDENCE_THRESHOLD
-    _log_prediction(request_id, model_class, state, confidence)
+    _log_prediction(request_id, model_class, state, confidence, state_confidence)
 
     return PredictionResponse(
         model_class=model_class,
         confidence=confidence,
         state=state,
+        state_confidence=state_confidence,
         processing_time=processing_time,
         timestamp=datetime.now(),
         request_id=request_id,

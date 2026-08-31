@@ -53,13 +53,36 @@
 `val model accuracy = 1.000` достижимо из-за небольшого и визуально хорошо
 разделимого набора классов; на новых доменах ожидается снижение.
 
+## Решение по состоянию
+
+Состояние определяется не argmax головы, а порогом на вероятность `dirty`:
+`p(dirty) >= api.state_dirty_threshold` → `dirty`, иначе `clean`. Порог живёт в
+`config.yaml` (`api.state_dirty_threshold`), ответ `/predict` дополнительно
+отдаёт `state_confidence` — уверенность в возвращённом состоянии.
+
+Порог калибруется `scripts/error_analysis_state.py --sweep`: перебор
+`p(dirty)` от 0.50 до 0.90 с шагом 0.05 и метрики dirty recall на
+`data/real_dirty_val`, false-dirty на синтетических чистых и на реальном
+probe-наборе. Правило выбора — максимальный порог, при котором dirty recall на
+реальной грязи остаётся `>= 0.90`. Текущее значение — **0.60** (recall 0.906;
+при 0.65 recall падает до 0.875). Порог перекалиброван после fine-tune v2:
+при том же пороге false-dirty на реальном probe-наборе упал с 0.30 до 0.087.
+
 ## Версия чекпоинта
 
-- Рабочий файл: `weights/multi_task_best.ckpt` (копия
-  `weights/multi-task-best-epoch=13-val_model_acc=1.000.ckpt`).
+- Рабочий файл: `weights/multi_task_best.ckpt` — **fine-tune v2**: тёплый старт
+  с v1 (`weights/multi-task-best-epoch=13-val_model_acc=1.000.ckpt`) через
+  `--init-checkpoint`, дообучение на feedback-примерах из
+  `data/dirty_clean/train` (18 потрёпанных чистых `kirovets`, префикс
+  `feedback_`), синтетика не регенерировалась. `--num-unfrozen-stages 1`,
+  `--lr 1e-4` (backbone `1e-5`), `--early-stopping-patience 3`; лучшая эпоха —
+  **2**, `val_model_acc 0.997`. Архивная копия — `weights/multi_task_best_v2_candidate.ckpt`.
+- Рабочие метрики при пороге `0.60`: real dirty recall **0.906**
+  (`data/real_dirty_val`), probe false-dirty **0.087** (`data/real_clean_probe`),
+  synthetic dirty recall **0.971** (`data/dirty_clean/test`).
 - Формат: чекпоинт PyTorch Lightning; `state_dict` с префиксом `model.`,
   параметры балансировки (`log_var_*`) отбрасываются при загрузке.
-- Гиперпараметры в чекпоинте: `num_unfrozen_stages=1`, `lr=5e-4`,
+- Гиперпараметры в чекпоинте: `num_unfrozen_stages=1`, `lr=1e-4`,
   `backbone_lr_factor=0.1`, `weight_decay=1e-4`, `loss_balancing=uncertainty`.
 - Выбор чекпоинта в рантайме — `src/models/loader.py:resolve_working_checkpoint`
   (сначала `config.weights.multi_task`, иначе самый свежий по `mtime`

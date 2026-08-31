@@ -20,7 +20,7 @@ def predict_image(
     model: MultiTaskTractorClassifier,
     image: str | Path | Image.Image,
     transform: Any,
-) -> tuple[int, float, int]:
+) -> tuple[int, float, int, float]:
     """Прогнать одно изображение через multi-task модель.
 
     Args:
@@ -29,8 +29,9 @@ def predict_image(
         transform: Валидационная трансформация Albumentations (принимает ``image=``).
 
     Returns:
-        Кортеж ``(model_idx, model_conf, state_idx)``: индекс класса техники,
-        его softmax-уверенность и индекс класса состояния (clean/dirty).
+        Кортеж ``(model_idx, model_conf, state_idx, state_conf)``: индекс класса
+        техники и его softmax-уверенность, индекс класса состояния (clean/dirty)
+        по argmax и softmax-уверенность этого состояния.
     """
     if isinstance(image, (str, Path)):
         image = Image.open(image)
@@ -47,7 +48,8 @@ def predict_image(
     model_idx = int(torch.argmax(model_probs, dim=1).item())
     state_idx = int(torch.argmax(state_probs, dim=1).item())
     model_conf = float(model_probs[0, model_idx].item())
-    return model_idx, model_conf, state_idx
+    state_conf = float(state_probs[0, state_idx].item())
+    return model_idx, model_conf, state_idx, state_conf
 
 
 __all__ = ["predict_image"]

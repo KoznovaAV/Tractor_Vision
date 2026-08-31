@@ -93,6 +93,8 @@ class ApiConfig:
         version: Версия сервиса.
         confidence_threshold: Порог уверенности; ниже него предсказание
             помечается флагом ``needs_review``.
+        state_dirty_threshold: Порог решения по состоянию; при ``p(dirty)`` не
+            ниже него состояние считается ``dirty``, иначе ``clean``.
         feedback_dir: Директория, куда ``/feedback`` сохраняет фото и манифесты.
     """
 
@@ -100,6 +102,7 @@ class ApiConfig:
     allowed_extensions: tuple[str, ...]
     version: str
     confidence_threshold: float
+    state_dirty_threshold: float
     feedback_dir: Path
 
 
@@ -164,6 +167,7 @@ def _parse_config(raw: dict[str, Any]) -> AppConfig:
         allowed_extensions=tuple(api_raw["allowed_extensions"]),
         version=str(api_raw["version"]),
         confidence_threshold=float(api_raw["confidence_threshold"]),
+        state_dirty_threshold=float(api_raw["state_dirty_threshold"]),
         feedback_dir=Path(api_raw["feedback_dir"]),
     )
     return AppConfig(

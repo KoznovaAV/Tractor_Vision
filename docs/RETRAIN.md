@@ -78,6 +78,44 @@ LR backbone в 10 раз меньше LR голов (`LearningRateMonitor`).
 Copy-Item weights/multi-task-best-epoch=13-val_model_acc=1.000.ckpt weights/multi_task_best.ckpt
 ```
 
+### Дообучение с тёплого старта
+
+Для инкрементального дообучения поверх рабочего чекпоинта (например, после
+вливания фидбэка) — вместо обучения с ImageNet-инициализации:
+
+- `--init-checkpoint <path>` — загрузить веса модели из готового `.ckpt` перед
+  обучением. Используется та же логика, что в
+  `src/models/loader.py:load_multi_task_model` (снятие префикса `model.`,
+  отбрасывание параметров балансировки `log_var_*`/`task_weights`); параметры
+  балансировки текущего запуска стартуют с нуля.
+- `--early-stopping-patience <N>` — терпение `EarlyStopping` по `val_model_acc`
+  (по умолчанию `15`). Для короткого дообучения (`--max-epochs 6..8`) ставить
+  `3..4`.
+- `--lr` понизить относительно базового `5e-4` (ориентир `1e-4`; backbone
+  остаётся в 10 раз медленнее).
+
+```powershell
+python -m src.training.multi_task_train `
+    --data-dir data/dirty_clean `
+    --init-checkpoint weights/multi_task_best.ckpt `
+    --num-unfrozen-stages 1 `
+    --lr 1e-4 `
+    --max-epochs 8 `
+    --early-stopping-patience 3 `
+    --weights-dir weights/ft_v2 `
+    --accelerator gpu
+```
+
+`--weights-dir` с отдельной папкой держит новые чекпоинты вне `weights/`, пока
+кандидат не подтверждён.
+
+> **State-ориентированное дообучение.** `monitor` остаётся `val_model_acc`
+> (семья — приоритетная задача), но при дообучении ради состояния выбор эпохи
+> подтверждай по `val_state_acc` в логах по эпохам: лучший `val_model_acc` и
+> лучший `val_state_acc` могут приходиться на разные эпохи. Финальную проверку
+> состояния вести по `scripts/error_analysis_state.py` (+`--sweep`), а не по
+> `val_state_acc`.
+
 ## Фаза 3. Оценка
 
 ```powershell
@@ -160,10 +198,14 @@ python -m scripts.eval_real_dirty --val-dir data/real_dirty_val --checkpoint wei
    python -m src.data.generate_dirty_dataset --clean-dir data/processed --output-dir data/dirty_clean --dirty-per-clean 2 --seed 42
    ```
 
-5. **Переобучение** по фазам 2–3 выше (`multi_task_train` →
-   `multi_task_evaluate`), затем оценка на реальной грязи по фазе 4f
-   (`eval_real_dirty`, цель dirty recall ≥ 0.90). Лучший чекпоинт сделать
-   рабочим, обновить метрики в `docs/MODEL_CARD.md` и `CLAUDE.md`.
+5. **Переобучение.** При небольшой feedback-добавке предпочтителен тёплый старт
+   с рабочего чекпоинта (`--init-checkpoint`, пониженный `--lr`, короткий
+   `--max-epochs` с `--early-stopping-patience 3..4` — см. «Дообучение с тёплого
+   старта» в фазе 2), иначе — полный прогон по фазам 2–3. Затем оценка на
+   реальной грязи по фазе 4f (`eval_real_dirty`, цель dirty recall ≥ 0.90) и,
+   если фидбэк был про состояние, `scripts/error_analysis_state.py --sweep` для
+   перекалибровки `api.state_dirty_threshold`. Лучший чекпоинт сделать рабочим,
+   обновить порог и метрики в `config.yaml`, `docs/MODEL_CARD.md` и `CLAUDE.md`.
 
 ## Фаза 5. Проверки перед выкладкой
 

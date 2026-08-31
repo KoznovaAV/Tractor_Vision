@@ -24,6 +24,7 @@ services:
     volumes:
       - ./weights:/app/weights:ro
       - ./config.yaml:/app/config.yaml:ro
+      - ./data/feedback:/app/data/feedback
     restart: unless-stopped
     healthcheck:
       test:
@@ -31,8 +32,7 @@ services:
         - python
         - -c
         - >-
-          import urllib.request;
-          urllib.request.urlopen('http://localhost:8000/health')
+          import urllib.request; urllib.request.urlopen('http://localhost:8000/health')
       interval: 30s
       timeout: 10s
       retries: 3

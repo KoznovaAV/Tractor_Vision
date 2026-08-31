@@ -8,11 +8,17 @@ from pydantic import BaseModel, Field
 
 
 class PredictionResponse(BaseModel):
-    """Ответ эндпоинта ``/predict``."""
+    """Ответ эндпоинта ``/predict``.
+
+    ``state_confidence`` — softmax-уверенность в возвращённом состоянии с учётом
+    порога ``api.state_dirty_threshold`` (``p(dirty)`` для ``dirty``,
+    ``1 - p(dirty)`` для ``clean``).
+    """
 
     model_class: str
     confidence: float = Field(ge=0.0, le=1.0)
     state: str | None = None
+    state_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     processing_time: float
     timestamp: datetime
     request_id: str

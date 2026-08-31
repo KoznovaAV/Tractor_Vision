@@ -138,7 +138,8 @@ def _validate(family: str, photo: Path) -> tuple[FeedbackItem | None, str | None
         return None, f"{photo}: нет манифеста {manifest_path.name}"
 
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        # utf-8-sig: PowerShell нередко пишет манифесты с BOM.
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
     except (json.JSONDecodeError, OSError) as exc:
         return None, f"{manifest_path}: манифест не читается ({exc})"
     if not isinstance(manifest, dict):
@@ -219,7 +220,7 @@ def _load_state_predictor(image_size: int, checkpoint: Path | None) -> StatePred
     transform = get_val_transforms(image_size)
 
     def _predict(photo: Path) -> str:
-        _, _, state_idx = predict_image(model, photo, transform)
+        _, _, state_idx, _ = predict_image(model, photo, transform)
         return STATE_CLASSES[state_idx]
 
     return _predict

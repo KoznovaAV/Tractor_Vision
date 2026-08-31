@@ -59,7 +59,7 @@ src/
 │   ├── multi_task.py       MultiTaskTractorClassifier
 │   ├── loader.py           load_multi_task_model(), resolve_working_checkpoint()
 │   ├── registry.py         build_registry(config), get_model(entry) — реестр из config.models
-│   └── predict.py          predict_image(model, image, transform) -> (idx, conf, state_idx)
+│   └── predict.py          predict_image(...) -> (idx, conf, state_idx, state_conf)
 ├── training/
 │   ├── multi_task_train.py     partial fine-tuning + uncertainty / gradnorm
 │   └── multi_task_evaluate.py  accuracy на val + опц. confusion matrix
@@ -102,8 +102,10 @@ PIL.Image -> RGB
       ▼
 MultiTaskTractorClassifier(tensor)  ->  (model_logits, state_logits)
       │  softmax + argmax  (src/models/predict.predict_image)
+      │  состояние: p(dirty) >= config.api.state_dirty_threshold ? dirty : clean
       ▼
-PredictionResponse: model_class, confidence, state, processing_time, timestamp
+PredictionResponse: model_class, confidence, state, state_confidence,
+                    processing_time, timestamp
 ```
 
 ## Реестр моделей

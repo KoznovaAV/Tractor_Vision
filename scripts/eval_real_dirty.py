@@ -85,7 +85,7 @@ def evaluate(
     per_class_dirty: dict[str, int] = defaultdict(int)
 
     for image_path, class_name in pairs:
-        model_pred, _, state_pred = predict_image(model, image_path, transform)
+        model_pred, _, state_pred, _ = predict_image(model, image_path, transform)
 
         total += 1
         per_class_total[class_name] += 1

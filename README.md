@@ -38,6 +38,7 @@ Multi-task компьютерное зрение для аудита парка 
 | Accuracy состояния clean/dirty, val | **0.942** |
 | Dirty recall на реальной грязи (held-out `data/real_dirty_val`) | **0.906** (цель ≥ 0.90) |
 | Порог `needs_review` в `/predict` | `confidence < 0.6` → ответ помечается на ручную проверку |
+| Порог состояния `api.state_dirty_threshold` | `p(dirty) >= 0.55` → `dirty` (калибровка `error_analysis_state.py --sweep`) |
 
 Val-метрики — на синтетической грязи `data/dirty_clean/val`. Подробности,
 ограничения и версия чекпоинта — [docs/MODEL_CARD.md](docs/MODEL_CARD.md).
@@ -120,6 +121,7 @@ curl -X POST http://localhost:8000/predict \
   "model_class": "mtz_belarus",
   "confidence": 0.987,
   "state": "clean",
+  "state_confidence": 0.912,
   "processing_time": 0.123,
   "timestamp": "2026-08-31T12:00:00",
   "request_id": "3f2a1c9e-8b7d-4e6a-9f10-2c5d8a1b3e4f",
@@ -129,7 +131,10 @@ curl -X POST http://localhost:8000/predict \
 
 `needs_review` — `true`, когда `confidence` ниже `config.yaml:api.confidence_threshold`
 (по умолчанию `0.6`): такой ответ стоит перепроверить и при ошибке отправить в
-`/feedback`. Каждая строка предсказания дописывается в `output/predictions.jsonl`.
+`/feedback`. `state` определяется порогом `config.yaml:api.state_dirty_threshold`
+(`p(dirty)` не ниже порога → `dirty`); `state_confidence` — уверенность в этом
+состоянии. Порог калибруется `scripts/error_analysis_state.py --sweep`. Каждая
+строка предсказания дописывается в `output/predictions.jsonl`.
 Параметр `?model=` выбирает модель из реестра (по умолчанию `machine`).
 
 Коды ошибок: `422` — недопустимое расширение / пустой / слишком большой файл /
