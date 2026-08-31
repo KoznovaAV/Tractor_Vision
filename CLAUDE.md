@@ -22,10 +22,13 @@ FastAPI + PyTorch Lightning + ConvNeXt-Tiny (multi-task: 4 семьи + state).
 ## Карта кода
 - `src/config/` — источник правды (classes.py, config_loader.py)
 - `src/data/` — датасет, трансформы, деградации (dataset.py, transforms.py, generate_dirty_dataset.py)
+- `src/data/utils.py` — общие утилиты конвейеров данных (compute_content_hash)
 - `src/models/` — архитектуры (multi_task.py)
+- `src/models/registry.py` — реестр моделей инференса из config.models
 - `src/training/` — обучение/оценка (multi_task_train.py, multi_task_evaluate.py)
 - `src/api/` — FastAPI (main.py, schemas.py)
 - `scripts/` — живые конвейеры (collect, prepare, generate, real-dirty цикл, demo)
+- `scripts/ingest_feedback.py` — вливание пользовательского фидбэка в train
 - `tests/` — тесты
 - `docs/` — ARCHITECTURE, MODEL_CARD, DATA, DEPLOYMENT, RETRAIN
 - `config.yaml` — единый конфиг
@@ -35,7 +38,7 @@ FastAPI + PyTorch Lightning + ConvNeXt-Tiny (multi-task: 4 семьи + state).
 - Model accuracy на val: 1.000
 - State accuracy на val: 0.942
 - Dirty recall на реальной грязи: 0.906 (цель ≥ 0.90 достигнута)
-- API: `/health`, `/models`, `/predict` (multi-task only)
+- API: `/health`, `/models` (реестр из config.models), `/predict` (request_id + needs_review), `/feedback`
 - Docker: CPU образ собран, но устарел (нужна пересборка)
 
 ## Стиль

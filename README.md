@@ -24,6 +24,9 @@ Multi-task компьютерное зрение для аудита парка 
 | `kirovets` | Кировец К-744 — тяжёлый колёсный трактор |
 | `mtz_belarus` | семейство МТЗ (объединяет бывшие `mtz_82` и `mtz_1221`) |
 
+Каждый класс — семейство техники целиком, без деления на подмодели и
+модификации: `mtz_belarus` покрывает весь модельный ряд МТЗ одной меткой.
+
 Состояние — 2 класса: `clean`, `dirty` (`clean=0`, `dirty=1`).
 
 ## Метрики
@@ -33,6 +36,7 @@ Multi-task компьютерное зрение для аудита парка 
 | Accuracy семьи трактора, val | **1.000** |
 | Accuracy состояния clean/dirty, val | **0.942** |
 | Dirty recall на реальной грязи (held-out `data/real_dirty_val`) | **0.906** (цель ≥ 0.90) |
+| Порог `needs_review` в `/predict` | `confidence < 0.6` → ответ помечается на ручную проверку |
 
 Val-метрики — на синтетической грязи `data/dirty_clean/val`. Подробности,
 ограничения и версия чекпоинта — [docs/MODEL_CARD.md](docs/MODEL_CARD.md).
@@ -116,12 +120,43 @@ curl -X POST http://localhost:8000/predict \
   "confidence": 0.987,
   "state": "clean",
   "processing_time": 0.123,
-  "timestamp": "2026-08-31T12:00:00"
+  "timestamp": "2026-08-31T12:00:00",
+  "request_id": "3f2a1c9e-8b7d-4e6a-9f10-2c5d8a1b3e4f",
+  "needs_review": false
 }
 ```
 
-Коды ошибок: `422` — недопустимое расширение / пустой / слишком большой файл;
-`500` — модель не загружена или битое изображение.
+`needs_review` — `true`, когда `confidence` ниже `config.yaml:api.confidence_threshold`
+(по умолчанию `0.6`): такой ответ стоит перепроверить и при ошибке отправить в
+`/feedback`. Каждая строка предсказания дописывается в `output/predictions.jsonl`.
+Параметр `?model=` выбирает модель из реестра (по умолчанию `machine`).
+
+Коды ошибок: `422` — недопустимое расширение / пустой / слишком большой файл /
+неизвестная модель; `500` — модель не загружена или битое изображение.
+
+### `POST /feedback`
+
+Исправление пользователя: `multipart/form-data` с полем `file` (изображение) и
+`user_family` (правильная семья, валидируется по `MODEL_CLASSES`). Опционально —
+`user_state` (`clean`/`dirty`) и `request_id` исходного `/predict`. Фото и
+JSON-манифест складываются в `config.yaml:api.feedback_dir/<user_family>/`;
+позже `scripts/ingest_feedback.py` вливает их в обучающую выборку (см.
+[docs/DATA.md](docs/DATA.md), [docs/RETRAIN.md](docs/RETRAIN.md)).
+
+```bash
+curl -X POST http://localhost:8000/feedback \
+  -F "file=@tractor.jpg;type=image/jpeg" \
+  -F "user_family=kirovets" \
+  -F "user_state=dirty" \
+  -F "request_id=3f2a1c9e-8b7d-4e6a-9f10-2c5d8a1b3e4f"
+```
+
+```json
+{ "saved": true, "path": "data/feedback/kirovets/3f2a1c9e-8b7d-4e6a-9f10-2c5d8a1b3e4f.jpg" }
+```
+
+Коды ошибок: `422` — недопустимое расширение, неизвестная семья или состояние,
+пустой / слишком большой файл.
 
 ## Как добавить класс техники
 
