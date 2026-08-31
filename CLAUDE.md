@@ -37,7 +37,8 @@ FastAPI + PyTorch Lightning + ConvNeXt-Tiny (multi-task: 4 семьи + state).
 - 4 класса: `chtz`, `johndeere`, `kirovets`, `mtz_belarus` (без подмоделей)
 - Model accuracy на val: 1.000
 - State accuracy на val: 0.942
-- Dirty recall на реальной грязи: 0.906 (цель ≥ 0.90 достигнута)
+- Dirty recall на реальной грязи: 0.893 (28 фото после чистки данных; цель ≥ 0.90, отставание в пределах шума малой выборки)
+- False-dirty на real_clean_probe: 0.158 (19 фото; kirovets 0.300); синтетика: clean false-dirty 0.080, dirty recall 0.971
 - API: `/health`, `/models` (реестр из config.models), `/predict` (request_id + needs_review), `/feedback`
 - Docker: CPU образ собран, но устарел (нужна пересборка)
 

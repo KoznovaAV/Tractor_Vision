@@ -43,8 +43,9 @@ api:
   confidence_threshold: 0.6
   # Порог решения по состоянию: p(dirty) >= порога -> dirty, иначе clean.
   # Значение подобрано sweep-ом scripts/error_analysis_state.py --sweep как
-  # максимальный порог, при котором dirty recall на real_dirty_val >= 0.90
-  # (fine-tune v2: 0.60 -> recall 0.906; при 0.65 recall падает до 0.875).
+  # максимальный порог, при котором dirty recall на real_dirty_val держится у 0.90
+  # (после чистки данных: 0.60 -> recall 0.893 на 28 фото, отставание в пределах
+  # шума малой выборки; false-dirty на real_clean_probe 0.158).
   state_dirty_threshold: 0.60
   # Куда /feedback складывает присланные пользователем фото и манифесты.
   feedback_dir: data/feedback
