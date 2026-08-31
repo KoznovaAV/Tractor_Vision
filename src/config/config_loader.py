@@ -1,7 +1,8 @@
 """Загрузка конфигурации проекта и метрик из метаданных чекпоинтов.
 
-Централизует чтение ``config.yaml`` (пути, ``image_size``, число классов) и
-извлечение accuracy из чекпоинтов Lightning: точность ищется в
+Централизует чтение ``config.yaml`` (пути, ``image_size``, число классов,
+реестр моделей ``models``) и извлечение accuracy из чекпоинтов Lightning:
+точность ищется в
 ``hyper_parameters`` и в корне чекпоинта по набору известных ключей
 (:data:`_ACCURACY_KEYS`), с fallback на значения из ``config.yaml``.
 
@@ -66,6 +67,23 @@ class WeightPaths:
 
 
 @dataclass(frozen=True)
+class ModelConfig:
+    """Одна запись реестра моделей инференса.
+
+    Attributes:
+        name: Имя модели (ключ раздела ``models`` в ``config.yaml``).
+        checkpoint: Путь к чекпоинту весов.
+        type: Тип загрузчика (например, ``multi_task``).
+        tasks: Задачи, которые решает модель (``family``, ``state`` и т. п.).
+    """
+
+    name: str
+    checkpoint: Path
+    type: str
+    tasks: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ApiConfig:
     """Параметры API.
 
@@ -73,11 +91,16 @@ class ApiConfig:
         max_file_size_bytes: Максимальный размер загружаемого файла в байтах.
         allowed_extensions: Разрешённые расширения изображений.
         version: Версия сервиса.
+        confidence_threshold: Порог уверенности; ниже него предсказание
+            помечается флагом ``needs_review``.
+        feedback_dir: Директория, куда ``/feedback`` сохраняет фото и манифесты.
     """
 
     max_file_size_bytes: int
     allowed_extensions: tuple[str, ...]
     version: str
+    confidence_threshold: float
+    feedback_dir: Path
 
 
 @dataclass(frozen=True)
@@ -90,6 +113,7 @@ class AppConfig:
         num_state_classes: Число классов состояния.
         data: Пути к данным.
         weights: Пути к весам.
+        models: Реестр моделей инференса по имени.
         api: Параметры API.
         fallback_accuracy: Резервные метрики, если их нет в чекпоинте.
     """
@@ -99,6 +123,7 @@ class AppConfig:
     num_state_classes: int
     data: DataPaths
     weights: WeightPaths
+    models: dict[str, ModelConfig]
     api: ApiConfig
     fallback_accuracy: dict[str, float | None]
 
@@ -125,10 +150,21 @@ def _parse_config(raw: dict[str, Any]) -> AppConfig:
         dir=Path(weights_raw["dir"]),
         multi_task=Path(weights_raw["multi_task"]),
     )
+    models = {
+        name: ModelConfig(
+            name=name,
+            checkpoint=Path(spec["checkpoint"]),
+            type=str(spec["type"]),
+            tasks=tuple(spec.get("tasks", ())),
+        )
+        for name, spec in raw.get("models", {}).items()
+    }
     api = ApiConfig(
         max_file_size_bytes=int(api_raw["max_file_size_mb"]) * 1024 * 1024,
         allowed_extensions=tuple(api_raw["allowed_extensions"]),
         version=str(api_raw["version"]),
+        confidence_threshold=float(api_raw["confidence_threshold"]),
+        feedback_dir=Path(api_raw["feedback_dir"]),
     )
     return AppConfig(
         image_size=int(raw["image_size"]),
@@ -136,6 +172,7 @@ def _parse_config(raw: dict[str, Any]) -> AppConfig:
         num_state_classes=int(raw["num_state_classes"]),
         data=data,
         weights=weights,
+        models=models,
         api=api,
         fallback_accuracy=dict(raw.get("fallback_accuracy", {})),
     )
@@ -227,6 +264,7 @@ __all__ = [
     "ApiConfig",
     "AppConfig",
     "DataPaths",
+    "ModelConfig",
     "WeightPaths",
     "load_config",
     "read_checkpoint_accuracy",

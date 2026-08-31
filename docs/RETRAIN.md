@@ -124,6 +124,47 @@ python -m scripts.eval_real_dirty --val-dir data/real_dirty_val --checkpoint wei
 Свежий, ни разу не виденный резерв реальной грязи —
 `data/real_dirty_reserve` (см. `docs/DATA.md`).
 
+## Триггер переобучения из фидбека
+
+Отдельный вход в цикл, когда исправления пользователей уже накоплены эндпоинтом
+`/feedback` в `data/feedback/<family>/` (структура пула — `docs/DATA.md`).
+
+1. **Накопление.** Дождаться порога в `data/feedback` — ориентир **50** новых
+   примеров (меньше — переобучение почти не двигает метрики):
+
+   ```powershell
+   (Get-ChildItem data/feedback -Recurse -Include *.jpg,*.jpeg,*.png).Count
+   ```
+
+2. **Сухой прогон.** Посмотреть, сколько пройдёт валидацию и дедупликацию:
+
+   ```powershell
+   python -m scripts.ingest_feedback --verbose
+   ```
+
+3. **Вливание.** Скопировать валидные фото в обучающую выборку с префиксом
+   `feedback_` (состояние — из манифеста либо прогноз модели):
+
+   ```powershell
+   python -m scripts.ingest_feedback --apply --verbose
+   ```
+
+   Результат: `data/dirty_clean/train/<family>/<state>/feedback_*`. Код возврата
+   `1`, если были ошибки валидации, — разобрать их перед обучением.
+
+4. **Регенерация синтетики** — только если нужен свежий `mud_crust` поверх
+   обновлённого `data/processed` (если чистое дерево не менялось, шаг можно
+   пропустить):
+
+   ```powershell
+   python -m src.data.generate_dirty_dataset --clean-dir data/processed --output-dir data/dirty_clean --dirty-per-clean 2 --seed 42
+   ```
+
+5. **Переобучение** по фазам 2–3 выше (`multi_task_train` →
+   `multi_task_evaluate`), затем оценка на реальной грязи по фазе 4f
+   (`eval_real_dirty`, цель dirty recall ≥ 0.90). Лучший чекпоинт сделать
+   рабочим, обновить метрики в `docs/MODEL_CARD.md` и `CLAUDE.md`.
+
 ## Фаза 5. Проверки перед выкладкой
 
 ```powershell

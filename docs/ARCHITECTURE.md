@@ -58,6 +58,7 @@ src/
 ├── models/
 │   ├── multi_task.py       MultiTaskTractorClassifier
 │   ├── loader.py           load_multi_task_model(), resolve_working_checkpoint()
+│   ├── registry.py         build_registry(config), get_model(entry) — реестр из config.models
 │   └── predict.py          predict_image(model, image, transform) -> (idx, conf, state_idx)
 ├── training/
 │   ├── multi_task_train.py     partial fine-tuning + uncertainty / gradnorm
@@ -105,10 +106,62 @@ MultiTaskTractorClassifier(tensor)  ->  (model_logits, state_logits)
 PredictionResponse: model_class, confidence, state, processing_time, timestamp
 ```
 
-Модель грузится один раз в `lifespan` FastAPI через
-`resolve_working_checkpoint()` → `load_multi_task_model()`. Если рабочего
-чекпоинта нет, сервис поднимается, `/health` возвращает `models_loaded: false`,
-а `/predict` отвечает `500`.
+## Реестр моделей
+
+Набор моделей инференса объявляется разделом `models` в `config.yaml`: ключ —
+имя модели в API (параметр `?model=`), значение — чекпоинт, тип загрузчика и
+список задач. `src/models/registry.py` разбирает раздел в `dict[str,
+ModelEntry]` через `build_registry(config)`; `ModelEntry` — неизменяемый
+dataclass (`name`, `checkpoint`, `type`, `tasks`).
+
+`get_model(entry)` загружает веса для записи и кэширует результат (`lru_cache` по
+самой записи): повторный вызов с той же записью возвращает тот же объект модели
+без повторного чтения чекпоинта. Поддерживается тип `multi_task`
+(`load_multi_task_model()`); при отсутствии файла чекпоинта записи берётся
+актуальный рабочий чекпоинт через `resolve_working_checkpoint()`, иначе —
+`ValueError` / `FileNotFoundError`.
+
+`lifespan` FastAPI при старте проходит по реестру и грузит каждую запись
+независимо через `get_model(entry)`; записи без доступного чекпоинта или с
+неподдерживаемым типом пропускаются. `/models` перечисляет загруженные записи
+(accuracy — из метаданных чекпоинта, fallback — `config.fallback_accuracy` по
+типу). `/predict` использует запись `machine` (константа `DEFAULT_MODEL`),
+параметр `?model=` выбирает другую: неизвестное имя — `422`, известное но не
+загруженное — `500`. Если не загрузилась ни одна запись, сервис поднимается,
+`/health` возвращает `models_loaded: false`, а `/predict` отвечает `500`.
+
+## Feedback-цикл
+
+Замкнутая петля дообучения головы состояния на реальных пользовательских
+данных:
+
+```
+POST /predict            ответ с request_id, confidence, needs_review
+      │  строка дописывается в output/predictions.jsonl
+      ▼
+пользователь видит ошибку (или needs_review) и присылает исправление
+      │
+POST /feedback           file + user_family (+ опц. user_state, request_id)
+      │  валидация семьи по MODEL_CLASSES, состояния по STATE_CLASSES
+      ▼
+data/feedback/<user_family>/<stem>.{jpg,json}   фото + JSON-манифест
+      │  накопление N примеров (ориентир — 50, см. RETRAIN.md)
+      ▼
+python -m scripts.ingest_feedback --apply
+      │  валидация + дедуп по content-hash против data/processed и data/dirty_clean
+      │  состояние: из manifest.user_state, иначе прогноз multi-task моделью
+      ▼
+data/dirty_clean/train/<family>/<state>/feedback_*   вливание в обучающую выборку
+      │  при необходимости — регенерация синтетики (mud_crust)
+      ▼
+переобучение по фазам RETRAIN.md  →  новый рабочий чекпоинт
+```
+
+`/feedback` только принимает и складывает данные — оно не трогает модель и не
+меняет датасет. Всё вливание идёт офлайн через `scripts/ingest_feedback.py`
+(по умолчанию сухой прогон, реальное копирование — `--apply`); фото и манифест
+**копируются**, каталог `data/feedback` остаётся нетронутым. Подробности пула —
+`DATA.md`, шаги переобучения — `RETRAIN.md`.
 
 ## Расширение архитектуры
 
@@ -118,5 +171,6 @@ PredictionResponse: model_class, confidence, state, processing_time, timestamp
   поднимет точность на «дальних» кадрах.
 - **Головы подмоделей** внутри семьи (например, модификации МТЗ) — добавляются
   как ещё одна `Linear`-голова на том же эмбеддинге, по образцу `state_head`.
-- **Feedback-петля**: ответы `/predict` с низкой `confidence` собираются в
-  `to_review` и после ручной проверки вливаются в датасет.
+- **Автотриггер переобучения**: сейчас накопление фидбэка и запуск
+  `ingest_feedback` — ручной шаг (см. «Feedback-цикл»); порог по числу примеров
+  можно повесить на планировщик.

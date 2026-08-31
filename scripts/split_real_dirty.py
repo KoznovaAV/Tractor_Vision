@@ -12,8 +12,9 @@
 
 Префикс ``real_`` позволяет отличать реальные грязные фото от синтетических
 (``*_dirty0``) внутри общей папки ``dirty/`` и при необходимости удалять/считать
-их отдельно. Стратификация и content-hash дедупликация переиспользуют подход из
-``prepare_dataset.py``. Классы берутся из :mod:`src.config.classes`.
+их отдельно. Дедупликация по content-hash использует
+:func:`src.data.utils.compute_content_hash`. Классы берутся из
+:mod:`src.config.classes`.
 
 Идемпотентно: имена файлов детерминированы (префикс + content-hash), повторный
 прогон не плодит копии.
@@ -30,7 +31,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import shutil
 import sys
 from collections import defaultdict
@@ -40,6 +40,7 @@ from pathlib import Path
 import numpy as np
 
 from src.config.classes import MODEL_CLASSES
+from src.data.utils import compute_content_hash
 
 IMAGE_EXTENSIONS: frozenset[str] = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 REAL_PREFIX: str = "real_"
@@ -60,22 +61,6 @@ class DirtyRecord:
     path: Path
     model_class: str
     content_hash: str
-
-
-def _content_hash(path: Path) -> str:
-    """Вычислить MD5 содержимого файла.
-
-    Args:
-        path: Путь к файлу.
-
-    Returns:
-        Шестнадцатеричный дайджест MD5.
-    """
-    hasher = hashlib.md5()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(65536), b""):
-            hasher.update(chunk)
-    return hasher.hexdigest()
 
 
 def _iter_source(source: Path) -> list[DirtyRecord]:
@@ -102,7 +87,7 @@ def _iter_source(source: Path) -> list[DirtyRecord]:
                     DirtyRecord(
                         path=image_path,
                         model_class=model_class,
-                        content_hash=_content_hash(image_path),
+                        content_hash=compute_content_hash(image_path),
                     )
                 )
     return records

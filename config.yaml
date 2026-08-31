@@ -25,11 +25,24 @@ weights:
   dir: weights
   multi_task: weights/multi_task_best.ckpt
 
+# Реестр моделей инференса. Ключ раздела — имя модели в API (параметр
+# ?model=), дефолт — machine. Каждая запись: чекпоинт, тип загрузчика и
+# список задач, которые модель решает.
+models:
+  machine:
+    checkpoint: weights/multi_task_best.ckpt
+    type: multi_task
+    tasks: [family, state]
+
 # Параметры API.
 api:
   max_file_size_mb: 10
   allowed_extensions: [".jpg", ".jpeg", ".png"]
   version: "1.0.0"
+  # Порог уверенности: предсказание с confidence ниже помечается needs_review.
+  confidence_threshold: 0.6
+  # Куда /feedback складывает присланные пользователем фото и манифесты.
+  feedback_dir: data/feedback
 
 # Fallback-метрики на случай, если в чекпоинте нет метаданных accuracy.
 # Основной источник — метаданные чекпоинта; эти значения используются, только

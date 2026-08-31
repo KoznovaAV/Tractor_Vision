@@ -20,8 +20,9 @@ train/val/test в пропорции 70/15/15 **стратифицированн
 
 Классы берутся явно из :data:`MODEL_CLASSES`, поэтому служебные папки
 (``to_review`` и т.п.) в пересборку не попадают. Дедупликация между источниками
-выполняется по content-hash (md5 содержимого файла), чтобы одно и то же
-изображение из разных источников не оказалось одновременно в train и test.
+выполняется по content-hash (:func:`src.data.utils.compute_content_hash`), чтобы
+одно и то же изображение из разных источников не оказалось одновременно в train
+и test.
 
 Пример::
 
@@ -35,7 +36,6 @@ train/val/test в пропорции 70/15/15 **стратифицированн
 from __future__ import annotations
 
 import argparse
-import hashlib
 import shutil
 import sys
 from collections import defaultdict
@@ -45,6 +45,7 @@ from pathlib import Path
 import numpy as np
 
 from src.config.classes import MODEL_CLASSES, STATE_CLASSES
+from src.data.utils import compute_content_hash
 
 IMAGE_EXTENSIONS: frozenset[str] = frozenset({".jpg", ".jpeg", ".png", ".webp", ".bmp"})
 SPLIT_NAMES: tuple[str, str, str] = ("train", "val", "test")
@@ -79,22 +80,6 @@ def _is_image(path: Path) -> bool:
         ``True`` для поддерживаемых расширений.
     """
     return path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
-
-
-def _content_hash(path: Path) -> str:
-    """Вычислить MD5 содержимого файла.
-
-    Args:
-        path: Путь к файлу.
-
-    Returns:
-        Шестнадцатеричный дайджест MD5.
-    """
-    hasher = hashlib.md5()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(65536), b""):
-            hasher.update(chunk)
-    return hasher.hexdigest()
 
 
 def _iter_source_images(source: Path) -> list[ImageRecord]:
@@ -142,7 +127,7 @@ def _iter_source_images(source: Path) -> list[ImageRecord]:
                                     path=image_path,
                                     model_class=model_class,
                                     state=state,
-                                    content_hash=_content_hash(image_path),
+                                    content_hash=compute_content_hash(image_path),
                                 )
                             )
             else:
@@ -159,7 +144,7 @@ def _iter_source_images(source: Path) -> list[ImageRecord]:
                             path=image_path,
                             model_class=model_class,
                             state=None,
-                            content_hash=_content_hash(image_path),
+                            content_hash=compute_content_hash(image_path),
                         )
                     )
     return records
