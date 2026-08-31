@@ -58,6 +58,7 @@ src/
 ├── models/
 │   ├── multi_task.py       MultiTaskTractorClassifier
 │   ├── loader.py           load_multi_task_model(), resolve_working_checkpoint()
+│   ├── registry.py         build_registry(config), get_model(entry) — реестр из config.models
 │   └── predict.py          predict_image(model, image, transform) -> (idx, conf, state_idx)
 ├── training/
 │   ├── multi_task_train.py     partial fine-tuning + uncertainty / gradnorm
@@ -105,10 +106,14 @@ MultiTaskTractorClassifier(tensor)  ->  (model_logits, state_logits)
 PredictionResponse: model_class, confidence, state, processing_time, timestamp
 ```
 
-Модель грузится один раз в `lifespan` FastAPI через
-`resolve_working_checkpoint()` → `load_multi_task_model()`. Если рабочего
-чекпоинта нет, сервис поднимается, `/health` возвращает `models_loaded: false`,
-а `/predict` отвечает `500`.
+Набор моделей задаётся разделом `models` в `config.yaml` и разбирается в реестр
+(`src/models/registry.py`). `lifespan` FastAPI грузит по каждой записи реестра
+свою модель через `get_model(entry)` (внутри — `load_multi_task_model()`, а при
+отсутствии чекпоинта записи — `resolve_working_checkpoint()`); загрузка кэшируется
+по записи. `/models` перечисляет загруженные записи реестра; `/predict` берёт
+запись `machine`, параметр `?model=` выбирает другую. Если ни одна запись не
+загрузилась, сервис поднимается, `/health` возвращает `models_loaded: false`, а
+`/predict` отвечает `500`.
 
 ## Расширение архитектуры
 

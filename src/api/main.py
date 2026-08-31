@@ -4,11 +4,16 @@
 Сервис поднимает единственную multi-task модель (семья трактора + состояние) и
 отдаёт эндпоинты ``/health``, ``/models``, ``/predict``.
 
+Набор моделей задаётся разделом ``models`` в ``config.yaml`` и разбирается в
+реестр (:mod:`src.models.registry`): ``lifespan`` грузит по записи реестра каждую
+доступную модель, ``/models`` перечисляет реестр, ``/predict`` использует запись
+``machine`` (переопределяется параметром ``?model=``).
+
 Параметры (``image_size``, пути к весам, ``version``, ``max_file_size``) берутся
 из ``config.yaml`` через :mod:`src.config.config_loader`; accuracy модели — из
 метаданных чекпоинта через :func:`resolve_accuracy` с fallback из конфига. Имена
-классов — из :mod:`src.config.classes`. Загрузка весов и инференс — общие утилиты
-из :mod:`src.models.loader` и :mod:`src.models.predict`.
+классов — из :mod:`src.config.classes`. Инференс — общая утилита из
+:mod:`src.models.predict`.
 """
 
 from __future__ import annotations
@@ -21,19 +26,23 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from PIL import Image
 
 from src.api.schemas import HealthResponse, ModelInfo, PredictionResponse
 from src.config.classes import MODEL_CLASSES, STATE_CLASSES
 from src.config.config_loader import load_config, resolve_accuracy
 from src.data.transforms import get_val_transforms
-from src.models.loader import load_multi_task_model, resolve_working_checkpoint
 from src.models.multi_task import MultiTaskTractorClassifier
 from src.models.predict import predict_image
+from src.models.registry import build_registry, get_model
 
-# Конфигурация читается один раз при импорте модуля.
+# Конфигурация и реестр моделей читаются один раз при импорте модуля.
 _CONFIG = load_config()
+_REGISTRY = build_registry(_CONFIG)
+
+# Модель по умолчанию для /predict, если параметр ?model= не задан.
+DEFAULT_MODEL: str = "machine"
 
 IMAGE_SIZE: int = _CONFIG.image_size
 MAX_FILE_SIZE: int = _CONFIG.api.max_file_size_bytes
@@ -43,26 +52,16 @@ API_VERSION: str = _CONFIG.api.version
 # Валидационная трансформация на едином размере.
 transform = get_val_transforms(IMAGE_SIZE)
 
-# Глобальная ссылка на загруженную модель.
-multi_task_model: MultiTaskTractorClassifier | None = None
-
-
-def _load_multi_task() -> MultiTaskTractorClassifier | None:
-    """Загрузить multi-task модель, если доступен рабочий чекпоинт.
-
-    Returns:
-        Модель в режиме eval либо ``None``, если веса недоступны.
-    """
-    try:
-        checkpoint_path = resolve_working_checkpoint()
-    except FileNotFoundError:
-        return None
-    return load_multi_task_model(checkpoint_path)
+# Модели, загруженные при старте: имя записи реестра -> модель в режиме eval.
+_loaded_models: dict[str, MultiTaskTractorClassifier] = {}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Загрузить модели при старте приложения.
+    """Загрузить модели реестра при старте приложения.
+
+    Каждая запись реестра грузится независимо; записи без доступного чекпоинта
+    или с неподдерживаемым типом пропускаются.
 
     Args:
         app: Экземпляр FastAPI.
@@ -70,10 +69,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     Yields:
         Управление на время жизни приложения.
     """
-    global multi_task_model
-    multi_task_model = _load_multi_task()
+    for name, entry in _REGISTRY.items():
+        try:
+            _loaded_models[name] = get_model(entry)
+        except (FileNotFoundError, ValueError):
+            continue
     yield
-    multi_task_model = None
+    _loaded_models.clear()
+    get_model.cache_clear()
 
 
 app = FastAPI(title="Tractor Vision API", version=API_VERSION, lifespan=lifespan)
@@ -86,7 +89,7 @@ async def health_check() -> HealthResponse:
     Returns:
         Статус сервиса, версия и флаг загруженности моделей.
     """
-    models_loaded = multi_task_model is not None
+    models_loaded = bool(_loaded_models)
     return HealthResponse(
         status="healthy",
         version=API_VERSION,
@@ -96,26 +99,29 @@ async def health_check() -> HealthResponse:
 
 @app.get("/models")
 async def list_models() -> dict[str, Any]:
-    """Список загруженных моделей с их метриками.
+    """Список моделей реестра, загруженных при старте, с их метриками.
 
-    Accuracy читается из метаданных чекпоинта, иначе из fallback конфига.
+    Accuracy читается из метаданных чекпоинта записи, иначе из fallback конфига
+    по типу модели.
 
     Returns:
         Словарь с ключами ``models`` (список) и ``count`` (число).
     """
     models: list[ModelInfo] = []
 
-    if multi_task_model is not None:
+    for name, entry in _REGISTRY.items():
+        if name not in _loaded_models:
+            continue
         accuracy = resolve_accuracy(
-            _CONFIG.weights.multi_task,
-            _CONFIG.fallback_accuracy.get("multi_task"),
+            entry.checkpoint,
+            _CONFIG.fallback_accuracy.get(entry.type),
         )
         models.append(
             ModelInfo(
-                name="Multi-Task Classifier",
+                name=entry.name,
                 num_classes=len(MODEL_CLASSES),
                 accuracy=accuracy if accuracy is not None else 0.0,
-                weights_path=str(_CONFIG.weights.multi_task),
+                weights_path=str(entry.checkpoint),
             )
         )
 
@@ -143,38 +149,52 @@ def _validate_upload(file: UploadFile) -> None:
         )
 
 
-def _run_inference(image: Image.Image) -> tuple[str, float, str]:
-    """Выполнить инференс multi-task моделью.
+def _run_inference(image: Image.Image, model_name: str) -> tuple[str, float, str]:
+    """Выполнить инференс моделью реестра по имени.
 
     Args:
         image: Открытое изображение ``PIL.Image``.
+        model_name: Имя записи реестра (параметр ``?model=``).
 
     Returns:
         Кортеж ``(model_class, confidence, state)``.
 
     Raises:
-        HTTPException: 500, если модель не загружена.
+        HTTPException: 422, если модель не значится в реестре; 500, если модель
+            есть в реестре, но не загружена.
     """
-    if multi_task_model is None:
+    if model_name not in _REGISTRY:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Неизвестная модель: {model_name!r}. Доступны: {sorted(_REGISTRY)}.",
+        )
+
+    model = _loaded_models.get(model_name)
+    if model is None:
         raise HTTPException(status_code=500, detail="No models loaded")
 
-    model_idx, confidence, state_idx = predict_image(multi_task_model, image, transform)
+    model_idx, confidence, state_idx = predict_image(model, image, transform)
     return MODEL_CLASSES[model_idx], confidence, STATE_CLASSES[state_idx]
 
 
 @app.post("/predict", response_model=PredictionResponse)
-async def predict(file: UploadFile = File(...)) -> PredictionResponse:
+async def predict(
+    file: UploadFile = File(...),
+    model: str = Query(default=DEFAULT_MODEL),
+) -> PredictionResponse:
     """Классифицировать трактор по изображению.
 
     Args:
         file: Загружаемое изображение (JPEG/PNG, максимум из конфига).
+        model: Имя модели из реестра; по умолчанию ``machine``.
 
     Returns:
         Предсказание с классом модели, уверенностью, состоянием и таймингом.
 
     Raises:
-        HTTPException: 422 при невалидном/пустом/слишком большом файле; 500 при
-            отсутствии моделей или ошибке обработки изображения.
+        HTTPException: 422 при невалидном/пустом/слишком большом файле или
+            неизвестной модели; 500 при отсутствии моделей или ошибке обработки
+            изображения.
     """
     _validate_upload(file)
 
@@ -193,7 +213,7 @@ async def predict(file: UploadFile = File(...)) -> PredictionResponse:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Ошибка обработки изображения: {exc}") from exc
 
-    model_class, confidence, state = _run_inference(image)
+    model_class, confidence, state = _run_inference(image, model)
     processing_time = time.perf_counter() - start
 
     return PredictionResponse(
