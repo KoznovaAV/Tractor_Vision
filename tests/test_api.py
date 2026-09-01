@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import io
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,14 @@ def client() -> TestClient:
     """
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter() -> Iterator[None]:
+    """Очищать in-memory счётчик лимита частоты вокруг каждого теста."""
+    api_main._rate_calls.clear()
+    yield
+    api_main._rate_calls.clear()
 
 
 def _make_image_bytes(fmt: str = "JPEG") -> bytes:
@@ -202,6 +211,67 @@ class TestPredictBatchEndpoint:
         files = [("files", self._jpeg(f"{i}.jpg")) for i in range(count)]
         response = client.post("/predict_batch", files=files)
         assert response.status_code == 413
+
+
+class TestAuthDisabled:
+    """Поведение при ``auth_enabled: false`` (значение по умолчанию)."""
+
+    def test_no_key_required(self, client: TestClient) -> None:
+        """Защищённый эндпоинт отвечает 200 без заголовка ``X-API-Key``."""
+        assert client.get("/models").status_code == 200
+
+
+class TestAuthEnabled:
+    """Поведение защищённых эндпоинтов при ``auth_enabled: true``."""
+
+    @pytest.fixture(autouse=True)
+    def _enable_auth(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Включить аутентификацию и задать ключи через переменную окружения."""
+        monkeypatch.setattr(api_main, "AUTH_ENABLED", True)
+        monkeypatch.setenv("TRACTOR_VISION_API_KEYS", "valid-key-1,valid-key-2")
+
+    def test_missing_key_401(self, client: TestClient) -> None:
+        """Нет заголовка ``X-API-Key``: 401 с JSON ``detail``."""
+        response = client.get("/models")
+        assert response.status_code == 401
+        assert "detail" in response.json()
+
+    def test_wrong_key_401(self, client: TestClient) -> None:
+        """Неверный ключ: 401."""
+        assert client.get("/models", headers={"X-API-Key": "bogus"}).status_code == 401
+
+    def test_valid_key_200(self, client: TestClient) -> None:
+        """Валидный ключ: 200."""
+        response = client.get("/models", headers={"X-API-Key": "valid-key-1"})
+        assert response.status_code == 200
+
+    def test_health_open(self, client: TestClient) -> None:
+        """``/health`` доступен без ключа даже при включённой аутентификации."""
+        assert client.get("/health").status_code == 200
+
+    def test_fail_fast_without_keys(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Пустая переменная окружения при включённом auth -> отказ старта."""
+        monkeypatch.delenv("TRACTOR_VISION_API_KEYS", raising=False)
+        with pytest.raises(RuntimeError):
+            with TestClient(app):
+                pass
+
+
+class TestRateLimit:
+    """Тесты лимита частоты запросов (скользящее окно 60 с)."""
+
+    @pytest.fixture(autouse=True)
+    def _tight_limit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Сжать лимит до 2 запросов в минуту."""
+        monkeypatch.setattr(api_main, "RATE_LIMIT_RPM", 2)
+
+    def test_third_request_429_with_retry_after(self, client: TestClient) -> None:
+        """Третий подряд запрос сверх лимита: 429 и заголовок ``Retry-After``."""
+        assert client.get("/models").status_code == 200
+        assert client.get("/models").status_code == 200
+        response = client.get("/models")
+        assert response.status_code == 429
+        assert "retry-after" in {k.lower() for k in response.headers}
 
 
 class TestDecideState:

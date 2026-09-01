@@ -100,6 +100,9 @@ class ApiConfig:
         state_dirty_threshold: Порог решения по состоянию; при ``p(dirty)`` не
             ниже него состояние считается ``dirty``, иначе ``clean``.
         feedback_dir: Директория, куда ``/feedback`` сохраняет фото и манифесты.
+        auth_enabled: Требовать заголовок ``X-API-Key`` на защищённых эндпоинтах.
+            Сами ключи берутся из переменной окружения, не из конфига.
+        rate_limit_rpm: Лимит запросов в минуту (скользящее окно 60 с).
     """
 
     max_file_size_bytes: int
@@ -109,6 +112,8 @@ class ApiConfig:
     confidence_threshold: float
     state_dirty_threshold: float
     feedback_dir: Path
+    auth_enabled: bool
+    rate_limit_rpm: int
 
 
 @dataclass(frozen=True)
@@ -176,6 +181,8 @@ def _parse_config(raw: dict[str, Any]) -> AppConfig:
         confidence_threshold=float(api_raw["confidence_threshold"]),
         state_dirty_threshold=float(api_raw["state_dirty_threshold"]),
         feedback_dir=Path(api_raw["feedback_dir"]),
+        auth_enabled=bool(api_raw.get("auth_enabled", False)),
+        rate_limit_rpm=int(api_raw.get("rate_limit_rpm", 60)),
     )
     return AppConfig(
         image_size=int(raw["image_size"]),

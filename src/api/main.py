@@ -23,6 +23,14 @@ SHA-256 чекпоинта); строка предсказания с теми �
 доступную модель, ``/models`` перечисляет реестр, ``/predict`` использует запись
 ``machine`` (переопределяется параметром ``?model=``).
 
+При ``api.auth_enabled: true`` эндпоинты ``/models``, ``/predict``,
+``/predict_batch`` и ``/feedback`` требуют заголовок ``X-API-Key`` (ключи — из
+переменной окружения ``TRACTOR_VISION_API_KEYS``, список через запятую; при
+пустой переменной сервис не стартует). ``/health`` и Swagger открыты всегда. Ко
+всем защищённым эндпоинтам применяется лимит частоты ``api.rate_limit_rpm``
+(скользящее окно 60 с, in-memory): на ключ при включённой аутентификации, иначе
+на IP клиента; превышение — ответ 429 с заголовком ``Retry-After``.
+
 Параметры (``image_size``, пути к весам, ``version``, ``max_file_size``,
 ``max_batch_size``) берутся
 из ``config.yaml`` через :mod:`src.config.config_loader`; accuracy модели — из
@@ -35,7 +43,10 @@ from __future__ import annotations
 
 import io
 import json
+import math
+import os
 import time
+from collections import defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -43,7 +54,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from PIL import Image
 
 from src.api.schemas import (
@@ -77,6 +88,17 @@ API_VERSION: str = _CONFIG.api.version
 CONFIDENCE_THRESHOLD: float = _CONFIG.api.confidence_threshold
 STATE_DIRTY_THRESHOLD: float = _CONFIG.api.state_dirty_threshold
 FEEDBACK_DIR: Path = _CONFIG.api.feedback_dir
+AUTH_ENABLED: bool = _CONFIG.api.auth_enabled
+RATE_LIMIT_RPM: int = _CONFIG.api.rate_limit_rpm
+
+# Ключи API не хранятся в конфиге: список через запятую в переменной окружения.
+API_KEYS_ENV: str = "TRACTOR_VISION_API_KEYS"
+
+# Ширина окна лимита частоты (сек).
+_RATE_WINDOW_SEC: float = 60.0
+
+# Идентификатор клиента (ключ или IP) -> монотонные метки запросов в окне.
+_rate_calls: dict[str, list[float]] = defaultdict(list)
 
 # Журнал предсказаний: одна JSON-строка на запрос /predict.
 PREDICTIONS_LOG: Path = Path("output/predictions.jsonl")
@@ -88,19 +110,94 @@ transform = get_val_transforms(IMAGE_SIZE)
 _loaded_models: dict[str, MultiTaskTractorClassifier] = {}
 
 
+def _configured_api_keys() -> frozenset[str]:
+    """Разобрать ключи API из переменной окружения ``TRACTOR_VISION_API_KEYS``.
+
+    Returns:
+        Множество непустых ключей (список через запятую), либо пустое множество.
+    """
+    raw = os.getenv(API_KEYS_ENV, "")
+    return frozenset(key.strip() for key in raw.split(",") if key.strip())
+
+
+def _enforce_rate_limit(identity: str) -> None:
+    """Ограничить частоту запросов идентификатора скользящим окном 60 секунд.
+
+    Args:
+        identity: Идентификатор клиента (API-ключ или IP).
+
+    Raises:
+        HTTPException: 429 с заголовком ``Retry-After`` (секунды до освобождения
+            слота), если в окне уже ``RATE_LIMIT_RPM`` запросов.
+    """
+    now = time.monotonic()
+    window_start = now - _RATE_WINDOW_SEC
+    calls = _rate_calls[identity]
+    calls[:] = [ts for ts in calls if ts > window_start]
+    if len(calls) >= RATE_LIMIT_RPM:
+        retry_after = max(1, math.ceil(calls[0] + _RATE_WINDOW_SEC - now))
+        raise HTTPException(
+            status_code=429,
+            detail="Превышен лимит запросов. Повторите позже.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    calls.append(now)
+
+
+async def require_api_key(
+    request: Request,
+    x_api_key: str | None = Header(default=None),
+) -> None:
+    """Зависимость защищённых эндпоинтов: проверка ключа и лимита частоты.
+
+    При ``AUTH_ENABLED`` требует валидный заголовок ``X-API-Key`` и считает лимит
+    частоты на ключ. Иначе ключ не нужен, а лимит считается на IP клиента
+    (``request.client.host``). ``/health`` и Swagger зависимость не подключают.
+
+    Args:
+        request: Входящий запрос (нужен для IP клиента).
+        x_api_key: Значение заголовка ``X-API-Key`` (может отсутствовать).
+
+    Raises:
+        HTTPException: 401 при отсутствующем или неверном ключе; 429 при
+            превышении лимита частоты.
+    """
+    if AUTH_ENABLED:
+        if x_api_key is None or x_api_key not in _configured_api_keys():
+            raise HTTPException(status_code=401, detail="Отсутствует или неверный API-ключ.")
+        identity = f"key:{x_api_key}"
+    else:
+        client = request.client
+        identity = f"ip:{client.host if client else 'unknown'}"
+    _enforce_rate_limit(identity)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Загрузить модели реестра при старте приложения.
+    """Проверить конфигурацию аутентификации и загрузить модели реестра.
 
-    Каждая запись реестра грузится независимо; записи без доступного чекпоинта
-    или с неподдерживаемым типом пропускаются.
+    Если ``auth_enabled: true``, но переменная окружения с ключами пуста —
+    поднимается :class:`RuntimeError` (fail fast). Каждая запись реестра затем
+    грузится независимо; записи без доступного чекпоинта или с неподдерживаемым
+    типом пропускаются.
 
     Args:
         app: Экземпляр FastAPI.
 
     Yields:
         Управление на время жизни приложения.
+
+    Raises:
+        RuntimeError: При ``auth_enabled: true`` и пустой переменной окружения
+            ``TRACTOR_VISION_API_KEYS``.
     """
+    if AUTH_ENABLED and not _configured_api_keys():
+        raise RuntimeError(
+            f"auth_enabled=true, но переменная окружения {API_KEYS_ENV} пуста. "
+            f"Задайте список ключей через запятую, например "
+            f"{API_KEYS_ENV}=key-a,key-b."
+        )
+
     for name, entry in _REGISTRY.items():
         try:
             _loaded_models[name] = get_model(entry)
@@ -134,7 +231,7 @@ async def health_check() -> HealthResponse:
     )
 
 
-@app.get("/models")
+@app.get("/models", dependencies=[Depends(require_api_key)])
 async def list_models() -> dict[str, Any]:
     """Список моделей реестра, загруженных при старте, с их метриками.
 
@@ -350,7 +447,7 @@ def _predict_contents(contents: bytes, model_name: str) -> PredictionResponse:
     )
 
 
-@app.post("/predict", response_model=PredictionResponse)
+@app.post("/predict", response_model=PredictionResponse, dependencies=[Depends(require_api_key)])
 async def predict(
     file: UploadFile = File(...),
     model: str = Query(default=DEFAULT_MODEL),
@@ -375,7 +472,11 @@ async def predict(
     return _predict_contents(contents, model)
 
 
-@app.post("/predict_batch", response_model=BatchPredictionResponse)
+@app.post(
+    "/predict_batch",
+    response_model=BatchPredictionResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def predict_batch(
     files: list[UploadFile] = File(...),
     model: str = Query(default=DEFAULT_MODEL),
@@ -434,7 +535,7 @@ async def predict_batch(
     )
 
 
-@app.post("/feedback", response_model=FeedbackResponse)
+@app.post("/feedback", response_model=FeedbackResponse, dependencies=[Depends(require_api_key)])
 async def feedback(
     file: UploadFile = File(...),
     user_family: str = Form(...),

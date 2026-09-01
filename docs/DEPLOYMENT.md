@@ -65,6 +65,46 @@ Anchor `x-build-cpu` фиксирует `TORCH_VARIANT: cpu`. Для GPU:
 чекпоинтом. Без него сервис поднимется, но `/health` вернёт
 `models_loaded: false`, а `/predict` — `500`.
 
+## Аутентификация и лимиты
+
+Защита эндпоинтов управляется секцией `api` в `config.yaml`:
+
+| Параметр | По умолчанию | Смысл |
+|----------|--------------|-------|
+| `api.auth_enabled` | `false` | требовать заголовок `X-API-Key` на `/models`, `/predict`, `/predict_batch`, `/feedback` |
+| `api.rate_limit_rpm` | `60` | лимит запросов в минуту (скользящее окно 60 с, in-memory) |
+
+`/health` и Swagger (`/docs`) открыты всегда.
+
+Сами ключи в конфиг **не** попадают — они задаются переменной окружения
+`TRACTOR_VISION_API_KEYS` (список через запятую). Если `auth_enabled: true`, а
+переменная пуста, сервис не стартует с явной ошибкой.
+
+Лимит частоты считается на ключ при включённой аутентификации и на IP клиента
+(`request.client.host`) при выключенной. Превышение — ответ `429` с заголовком
+`Retry-After` (секунды до освобождения слота).
+
+```bash
+# локальный запуск с аутентификацией
+export TRACTOR_VISION_API_KEYS="prod-key-1,prod-key-2"
+# в config.yaml: api.auth_enabled: true
+uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+
+curl -H "X-API-Key: prod-key-1" http://localhost:8000/models
+```
+
+Для `docker compose` ключи передаются через `environment` сервиса `api`
+(значение подставляется из окружения хоста или `.env`):
+
+```yaml
+services:
+  api:
+    environment:
+      TRACTOR_VISION_API_KEYS: ${TRACTOR_VISION_API_KEYS}
+```
+
+При этом `api.auth_enabled: true` включается в смонтированном `config.yaml`.
+
 ## Проверки после деплоя
 
 ```powershell
