@@ -56,6 +56,15 @@ class TestHealthEndpoint:
         assert "version" in body
         assert "models_loaded" in body
 
+    def test_health_lists_models_with_versions(self, client: TestClient) -> None:
+        """``models`` перечисляет записи реестра с полями ``name`` и ``version``."""
+        body = client.get("/health").json()
+        assert isinstance(body["models"], list)
+        names = {m["name"] for m in body["models"]}
+        assert "machine" in names
+        machine = next(m for m in body["models"] if m["name"] == "machine")
+        assert machine["version"] == "v2-finetune"
+
 
 class TestModelsEndpoint:
     """Тесты эндпоинта ``/models``."""
@@ -90,6 +99,26 @@ class TestPredictEndpoint:
         assert isinstance(body["needs_review"], bool)
         assert isinstance(body["state_confidence"], float)
         assert 0.0 <= body["state_confidence"] <= 1.0
+
+    def test_predict_ok_has_traceability_fields(self, client: TestClient) -> None:
+        """При успехе присутствуют ``model_version`` и ``checkpoint_sha``."""
+        files = {"file": ("tractor.jpg", _make_image_bytes("JPEG"), "image/jpeg")}
+        response = client.post("/predict", files=files)
+        if response.status_code != 200:
+            pytest.skip("модель не загружена в тестовом окружении")
+        body = response.json()
+        assert body["model_version"] == "v2-finetune"
+        assert isinstance(body["checkpoint_sha"], str)
+        assert len(body["checkpoint_sha"]) == 12
+
+    def test_predict_checkpoint_sha_stable(self, client: TestClient) -> None:
+        """``checkpoint_sha`` одинаков между двумя запросами."""
+        files = {"file": ("tractor.jpg", _make_image_bytes("JPEG"), "image/jpeg")}
+        first = client.post("/predict", files=files)
+        second = client.post("/predict", files=files)
+        if first.status_code != 200 or second.status_code != 200:
+            pytest.skip("модель не загружена в тестовом окружении")
+        assert first.json()["checkpoint_sha"] == second.json()["checkpoint_sha"]
 
     def test_predict_with_invalid_extension(self, client: TestClient) -> None:
         """Недопустимое расширение файла: 422."""

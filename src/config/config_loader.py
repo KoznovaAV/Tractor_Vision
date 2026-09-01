@@ -75,12 +75,15 @@ class ModelConfig:
         checkpoint: Путь к чекпоинту весов.
         type: Тип загрузчика (например, ``multi_task``).
         tasks: Задачи, которые решает модель (``family``, ``state`` и т. п.).
+        version: Метка версии модели для трассируемости; ``None``, если в
+            конфиге не задана.
     """
 
     name: str
     checkpoint: Path
     type: str
     tasks: tuple[str, ...]
+    version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -159,6 +162,7 @@ def _parse_config(raw: dict[str, Any]) -> AppConfig:
             checkpoint=Path(spec["checkpoint"]),
             type=str(spec["type"]),
             tasks=tuple(spec.get("tasks", ())),
+            version=str(spec["version"]) if spec.get("version") is not None else None,
         )
         for name, spec in raw.get("models", {}).items()
     }

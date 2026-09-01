@@ -13,6 +13,10 @@ class PredictionResponse(BaseModel):
     ``state_confidence`` — softmax-уверенность в возвращённом состоянии с учётом
     порога ``api.state_dirty_threshold`` (``p(dirty)`` для ``dirty``,
     ``1 - p(dirty)`` для ``clean``).
+
+    ``model_version`` и ``checkpoint_sha`` идентифицируют модель, выдавшую
+    предсказание: метка версии из ``config.yaml`` (``None``, если не задана) и
+    первые 12 hex-символов SHA-256 файла чекпоинта.
     """
 
     model_class: str
@@ -23,6 +27,8 @@ class PredictionResponse(BaseModel):
     timestamp: datetime
     request_id: str
     needs_review: bool
+    model_version: str | None = None
+    checkpoint_sha: str | None = None
 
 
 class FeedbackResponse(BaseModel):
@@ -32,12 +38,24 @@ class FeedbackResponse(BaseModel):
     path: str
 
 
+class HealthModelVersion(BaseModel):
+    """Имя и метка версии одной модели реестра для ``/health``."""
+
+    name: str
+    version: str | None = None
+
+
 class HealthResponse(BaseModel):
-    """Ответ эндпоинта ``/health``."""
+    """Ответ эндпоинта ``/health``.
+
+    ``models`` перечисляет модели реестра с их метками версий (``version`` —
+    ``None``, если в конфиге не задана).
+    """
 
     status: str = "healthy"
     version: str = "1.0.0"
     models_loaded: bool = False
+    models: list[HealthModelVersion] = Field(default_factory=list)
 
 
 class ModelInfo(BaseModel):

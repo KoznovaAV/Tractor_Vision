@@ -26,13 +26,14 @@ weights:
   multi_task: weights/multi_task_best.ckpt
 
 # Реестр моделей инференса. Ключ раздела — имя модели в API (параметр
-# ?model=), дефолт — machine. Каждая запись: чекпоинт, тип загрузчика и
-# список задач, которые модель решает.
+# ?model=), дефолт — machine. Каждая запись: чекпоинт, тип загрузчика,
+# список задач и опциональная метка версии (version) для трассируемости.
 models:
   machine:
     checkpoint: weights/multi_task_best.ckpt
     type: multi_task
     tasks: [family, state]
+    version: "v2-finetune"
 
 # Параметры API.
 api:

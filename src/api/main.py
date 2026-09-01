@@ -5,12 +5,15 @@
 отдаёт эндпоинты ``/health``, ``/models``, ``/predict``, ``/feedback``.
 
 Каждый ответ ``/predict`` получает ``request_id`` (uuid4), флаг ``needs_review``
-(уверенность ниже ``api.confidence_threshold``) и ``state_confidence`` —
+(уверенность ниже ``api.confidence_threshold``), ``state_confidence`` —
 уверенность в состоянии, решённом по порогу ``api.state_dirty_threshold``
-(``p(dirty)`` не ниже порога -> ``dirty``); строка предсказания дописывается в
-``output/predictions.jsonl``. ``/feedback`` принимает присланное пользователем
-фото с исправленной семьёй (и опционально состоянием) и складывает его в
-``api.feedback_dir/<user_family>/`` рядом с JSON-манифестом.
+(``p(dirty)`` не ниже порога -> ``dirty``) — и идентификаторы модели
+``model_version`` (метка из конфига) и ``checkpoint_sha`` (12 hex-символов
+SHA-256 чекпоинта); строка предсказания с теми же полями дописывается в
+``output/predictions.jsonl``. ``/health`` перечисляет модели реестра с версиями.
+``/feedback`` принимает присланное пользователем фото с исправленной семьёй (и
+опционально состоянием) и складывает его в ``api.feedback_dir/<user_family>/``
+рядом с JSON-манифестом.
 
 Набор моделей задаётся разделом ``models`` в ``config.yaml`` и разбирается в
 реестр (:mod:`src.models.registry`): ``lifespan`` грузит по записи реестра каждую
@@ -39,13 +42,19 @@ from uuid import uuid4
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from PIL import Image
 
-from src.api.schemas import FeedbackResponse, HealthResponse, ModelInfo, PredictionResponse
+from src.api.schemas import (
+    FeedbackResponse,
+    HealthModelVersion,
+    HealthResponse,
+    ModelInfo,
+    PredictionResponse,
+)
 from src.config.classes import MODEL_CLASSES, STATE_CLASSES, state_to_idx
 from src.config.config_loader import load_config, resolve_accuracy
 from src.data.transforms import get_val_transforms
 from src.models.multi_task import MultiTaskTractorClassifier
 from src.models.predict import predict_image
-from src.models.registry import build_registry, get_model
+from src.models.registry import build_registry, get_model, get_model_meta
 
 # Конфигурация и реестр моделей читаются один раз при импорте модуля.
 _CONFIG = load_config()
@@ -103,13 +112,18 @@ async def health_check() -> HealthResponse:
     """Проверка здоровья сервиса.
 
     Returns:
-        Статус сервиса, версия и флаг загруженности моделей.
+        Статус сервиса, версия, флаг загруженности моделей и список моделей
+        реестра с их метками версий.
     """
     models_loaded = bool(_loaded_models)
     return HealthResponse(
         status="healthy",
         version=API_VERSION,
         models_loaded=models_loaded,
+        models=[
+            HealthModelVersion(name=entry.name, version=entry.version)
+            for entry in _REGISTRY.values()
+        ],
     )
 
 
@@ -187,7 +201,9 @@ def _decide_state(state_idx: int, state_conf: float) -> tuple[str, float]:
     return "clean", 1.0 - p_dirty
 
 
-def _run_inference(image: Image.Image, model_name: str) -> tuple[str, float, str, float]:
+def _run_inference(
+    image: Image.Image, model_name: str
+) -> tuple[str, float, str, float, str | None, str]:
     """Выполнить инференс моделью реестра по имени.
 
     Args:
@@ -195,7 +211,8 @@ def _run_inference(image: Image.Image, model_name: str) -> tuple[str, float, str
         model_name: Имя записи реестра (параметр ``?model=``).
 
     Returns:
-        Кортеж ``(model_class, confidence, state, state_confidence)``.
+        Кортеж ``(model_class, confidence, state, state_confidence,
+        model_version, checkpoint_sha)``.
 
     Raises:
         HTTPException: 422, если модель не значится в реестре; 500, если модель
@@ -207,13 +224,20 @@ def _run_inference(image: Image.Image, model_name: str) -> tuple[str, float, str
             detail=f"Неизвестная модель: {model_name!r}. Доступны: {sorted(_REGISTRY)}.",
         )
 
-    model = _loaded_models.get(model_name)
-    if model is None:
+    if model_name not in _loaded_models:
         raise HTTPException(status_code=500, detail="No models loaded")
 
+    model, model_version, checkpoint_sha = get_model_meta(_REGISTRY[model_name])
     model_idx, confidence, state_idx, state_conf = predict_image(model, image, transform)
     state, state_confidence = _decide_state(state_idx, state_conf)
-    return MODEL_CLASSES[model_idx], confidence, state, state_confidence
+    return (
+        MODEL_CLASSES[model_idx],
+        confidence,
+        state,
+        state_confidence,
+        model_version,
+        checkpoint_sha,
+    )
 
 
 def _log_prediction(
@@ -222,6 +246,8 @@ def _log_prediction(
     state: str,
     confidence: float,
     state_confidence: float,
+    model_version: str | None,
+    checkpoint_sha: str,
 ) -> None:
     """Дописать строку предсказания в ``output/predictions.jsonl``.
 
@@ -231,6 +257,8 @@ def _log_prediction(
         state: Предсказанное состояние (clean/dirty).
         confidence: Уверенность модели в семье.
         state_confidence: Уверенность в решённом состоянии.
+        model_version: Метка версии модели из конфига (``None``, если не задана).
+        checkpoint_sha: Первые 12 hex-символов SHA-256 файла чекпоинта.
     """
     PREDICTIONS_LOG.parent.mkdir(parents=True, exist_ok=True)
     record = {
@@ -240,6 +268,8 @@ def _log_prediction(
         "state": state,
         "confidence": confidence,
         "state_confidence": state_confidence,
+        "model_version": model_version,
+        "checkpoint_sha": checkpoint_sha,
     }
     with PREDICTIONS_LOG.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -282,12 +312,27 @@ async def predict(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Ошибка обработки изображения: {exc}") from exc
 
-    model_class, confidence, state, state_confidence = _run_inference(image, model)
+    (
+        model_class,
+        confidence,
+        state,
+        state_confidence,
+        model_version,
+        checkpoint_sha,
+    ) = _run_inference(image, model)
     processing_time = time.perf_counter() - start
 
     request_id = str(uuid4())
     needs_review = confidence < CONFIDENCE_THRESHOLD
-    _log_prediction(request_id, model_class, state, confidence, state_confidence)
+    _log_prediction(
+        request_id,
+        model_class,
+        state,
+        confidence,
+        state_confidence,
+        model_version,
+        checkpoint_sha,
+    )
 
     return PredictionResponse(
         model_class=model_class,
@@ -298,6 +343,8 @@ async def predict(
         timestamp=datetime.now(),
         request_id=request_id,
         needs_review=needs_review,
+        model_version=model_version,
+        checkpoint_sha=checkpoint_sha,
     )
 
 
