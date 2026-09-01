@@ -28,18 +28,28 @@ FastAPI + PyTorch Lightning + ConvNeXt-Tiny (multi-task: 4 семьи + state).
 - `src/training/` — обучение/оценка (multi_task_train.py, multi_task_evaluate.py)
 - `src/api/` — FastAPI (main.py, schemas.py)
 - `scripts/` — живые конвейеры (collect, prepare, generate, real-dirty цикл, demo)
+- `scripts/error_analysis_state.py` — разбор промахов головы состояния; `--sweep`
+  калибрует `state_dirty_threshold` по dirty recall на `data/real_dirty_val`
 - `scripts/ingest_feedback.py` — вливание пользовательского фидбэка в train
-- `tests/` — тесты
+- `tests/` — тесты (64 шт., все на моках/`tmp_path`, не требуют `weights/` и `data/`)
 - `docs/` — ARCHITECTURE, MODEL_CARD, DATA, DEPLOYMENT, RETRAIN
 - `config.yaml` — единый конфиг
+- `.github/workflows/ci.yml` — GitHub Actions: pre-commit + pytest на CPU-torch
 
-## Текущее состояние (31.08.2026)
+## Текущее состояние (01.09.2026)
 - 4 класса: `chtz`, `johndeere`, `kirovets`, `mtz_belarus` (без подмоделей)
-- Model accuracy на val: 1.000
-- State accuracy на val: 0.942
-- Dirty recall на реальной грязи: 0.893 (28 фото после чистки данных; цель ≥ 0.90, отставание в пределах шума малой выборки)
-- False-dirty на real_clean_probe: 0.158 (19 фото; kirovets 0.300); синтетика: clean false-dirty 0.080, dirty recall 0.971
-- API: `/health`, `/models` (реестр из config.models), `/predict` (request_id + needs_review), `/feedback`
+- Family accuracy на val: 0.997
+- Real dirty recall (`data/real_dirty_val`): 0.893 (28 фото)
+- Probe false-dirty (`data/real_clean_probe`, argmax): 0.158
+- `state_dirty_threshold`: 0.60 (откалиброван через `error_analysis_state.py --sweep`)
+- API: `/health`, `/models` (реестр из config.models), `/predict`
+  (request_id + needs_review + model_version/checkpoint_sha), `/predict_batch`
+  (пофайловая обработка ошибок), `/feedback`
+- Аутентификация: заголовок `X-API-Key`, ключи в env `TRACTOR_VISION_API_KEYS`
+  (список через запятую); при пустом env auth отключена
+- Rate limit: пер-ключ, in-memory окно (настройки в config.yaml)
+- Обучение: `--init-checkpoint` (дообучение с готовых весов),
+  `--early-stopping-patience` (ранняя остановка по val)
 - Docker: CPU образ собран, но устарел (нужна пересборка)
 
 ## Стиль
