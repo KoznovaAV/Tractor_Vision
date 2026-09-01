@@ -139,6 +139,71 @@ class TestPredictEndpoint:
         assert response.status_code in (200, 500)
 
 
+class TestPredictBatchEndpoint:
+    """Тесты эндпоинта ``/predict_batch``."""
+
+    def _jpeg(self, name: str) -> tuple[str, bytes, str]:
+        return (name, _make_image_bytes("JPEG"), "image/jpeg")
+
+    def test_two_valid_images_two_ok(self, client: TestClient) -> None:
+        """Два валидных файла: HTTP 200, оба ``ok``, счётчики консистентны."""
+        files = [("files", self._jpeg("a.jpg")), ("files", self._jpeg("b.jpg"))]
+        response = client.post("/predict_batch", files=files)
+        if response.status_code == 500:
+            pytest.skip("модель не загружена в тестовом окружении")
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body["results"]) == 2
+        assert all(item["status"] == "ok" for item in body["results"])
+        assert all(item["prediction"] is not None for item in body["results"])
+        assert body["processed"] == 2
+        assert body["failed"] == 0
+
+    def test_partial_failure_still_http_200(self, client: TestClient) -> None:
+        """Валидный + битый файл: HTTP 200, 1 ``ok`` + 1 ``error``."""
+        files = [
+            ("files", self._jpeg("good.jpg")),
+            ("files", ("broken.jpg", b"not really a jpeg", "image/jpeg")),
+        ]
+        response = client.post("/predict_batch", files=files)
+        if response.status_code == 500:
+            pytest.skip("модель не загружена в тестовом окружении")
+        assert response.status_code == 200
+        body = response.json()
+        statuses = sorted(item["status"] for item in body["results"])
+        assert statuses == ["error", "ok"]
+        assert body["processed"] == 1
+        assert body["failed"] == 1
+        error_item = next(i for i in body["results"] if i["status"] == "error")
+        assert error_item["error"]
+        assert error_item["prediction"] is None
+
+    def test_processed_failed_consistent(self, client: TestClient) -> None:
+        """``processed + failed`` равно длине ``results``."""
+        files = [
+            ("files", self._jpeg("a.jpg")),
+            ("files", ("bad.jpg", b"xxx", "image/jpeg")),
+            ("files", self._jpeg("c.jpg")),
+        ]
+        response = client.post("/predict_batch", files=files)
+        if response.status_code == 500:
+            pytest.skip("модель не загружена в тестовом окружении")
+        body = response.json()
+        assert body["processed"] + body["failed"] == len(body["results"])
+
+    def test_empty_batch_422(self, client: TestClient) -> None:
+        """Батч без файлов: 422."""
+        response = client.post("/predict_batch")
+        assert response.status_code == 422
+
+    def test_over_limit_batch_413(self, client: TestClient) -> None:
+        """Больше ``max_batch_size`` файлов: 413."""
+        count = api_main.MAX_BATCH_SIZE + 1
+        files = [("files", self._jpeg(f"{i}.jpg")) for i in range(count)]
+        response = client.post("/predict_batch", files=files)
+        assert response.status_code == 413
+
+
 class TestDecideState:
     """Тесты решения по состоянию из порога ``api.state_dirty_threshold``."""
 

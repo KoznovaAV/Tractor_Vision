@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -27,6 +28,35 @@ class PredictionResponse(BaseModel):
     timestamp: datetime
     request_id: str
     needs_review: bool
+    model_version: str | None = None
+    checkpoint_sha: str | None = None
+
+
+class BatchItemResult(BaseModel):
+    """Результат одного файла в ответе ``/predict_batch``.
+
+    ``status`` — ``ok`` (тогда заполнено ``prediction``) либо ``error`` (тогда
+    заполнено ``error`` с текстом причины).
+    """
+
+    file_name: str
+    status: Literal["ok", "error"]
+    error: str | None = None
+    prediction: PredictionResponse | None = None
+
+
+class BatchPredictionResponse(BaseModel):
+    """Ответ эндпоинта ``/predict_batch``.
+
+    ``processed`` — число успешно обработанных файлов, ``failed`` — число файлов
+    с ошибкой; их сумма равна длине ``results``. ``model_version`` и
+    ``checkpoint_sha`` берутся из первого успешного предсказания (``None``, если
+    успешных нет).
+    """
+
+    results: list[BatchItemResult]
+    processed: int
+    failed: int
     model_version: str | None = None
     checkpoint_sha: str | None = None
 

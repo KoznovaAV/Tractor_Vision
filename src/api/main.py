@@ -2,7 +2,8 @@
 """FastAPI-приложение инференса Tractor Vision.
 
 Сервис поднимает единственную multi-task модель (семья трактора + состояние) и
-отдаёт эндпоинты ``/health``, ``/models``, ``/predict``, ``/feedback``.
+отдаёт эндпоинты ``/health``, ``/models``, ``/predict``, ``/predict_batch``,
+``/feedback``.
 
 Каждый ответ ``/predict`` получает ``request_id`` (uuid4), флаг ``needs_review``
 (уверенность ниже ``api.confidence_threshold``), ``state_confidence`` —
@@ -10,17 +11,20 @@
 (``p(dirty)`` не ниже порога -> ``dirty``) — и идентификаторы модели
 ``model_version`` (метка из конфига) и ``checkpoint_sha`` (12 hex-символов
 SHA-256 чекпоинта); строка предсказания с теми же полями дописывается в
-``output/predictions.jsonl``. ``/health`` перечисляет модели реестра с версиями.
-``/feedback`` принимает присланное пользователем фото с исправленной семьёй (и
-опционально состоянием) и складывает его в ``api.feedback_dir/<user_family>/``
-рядом с JSON-манифестом.
+``output/predictions.jsonl``. ``/predict_batch`` принимает список файлов (поле
+``files``) и обрабатывает каждый независимо: сбой одного файла не роняет батч, а
+даёт ``status="error"`` для этого элемента. ``/health`` перечисляет модели
+реестра с версиями. ``/feedback`` принимает присланное пользователем фото с
+исправленной семьёй (и опционально состоянием) и складывает его в
+``api.feedback_dir/<user_family>/`` рядом с JSON-манифестом.
 
 Набор моделей задаётся разделом ``models`` в ``config.yaml`` и разбирается в
 реестр (:mod:`src.models.registry`): ``lifespan`` грузит по записи реестра каждую
 доступную модель, ``/models`` перечисляет реестр, ``/predict`` использует запись
 ``machine`` (переопределяется параметром ``?model=``).
 
-Параметры (``image_size``, пути к весам, ``version``, ``max_file_size``) берутся
+Параметры (``image_size``, пути к весам, ``version``, ``max_file_size``,
+``max_batch_size``) берутся
 из ``config.yaml`` через :mod:`src.config.config_loader`; accuracy модели — из
 метаданных чекпоинта через :func:`resolve_accuracy` с fallback из конфига. Имена
 классов — из :mod:`src.config.classes`. Инференс — общая утилита из
@@ -43,6 +47,8 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from PIL import Image
 
 from src.api.schemas import (
+    BatchItemResult,
+    BatchPredictionResponse,
     FeedbackResponse,
     HealthModelVersion,
     HealthResponse,
@@ -65,6 +71,7 @@ DEFAULT_MODEL: str = "machine"
 
 IMAGE_SIZE: int = _CONFIG.image_size
 MAX_FILE_SIZE: int = _CONFIG.api.max_file_size_bytes
+MAX_BATCH_SIZE: int = _CONFIG.api.max_batch_size
 ALLOWED_EXTENSIONS: frozenset[str] = frozenset(_CONFIG.api.allowed_extensions)
 API_VERSION: str = _CONFIG.api.version
 CONFIDENCE_THRESHOLD: float = _CONFIG.api.confidence_threshold
@@ -275,29 +282,24 @@ def _log_prediction(
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-@app.post("/predict", response_model=PredictionResponse)
-async def predict(
-    file: UploadFile = File(...),
-    model: str = Query(default=DEFAULT_MODEL),
-) -> PredictionResponse:
-    """Классифицировать трактор по изображению.
+def _predict_contents(contents: bytes, model_name: str) -> PredictionResponse:
+    """Обработать байты одного изображения: инференс, лог, ответ.
+
+    Общее ядро ``/predict`` и ``/predict_batch``. Пишет строку предсказания в
+    ``output/predictions.jsonl`` со своим ``request_id``.
 
     Args:
-        file: Загружаемое изображение (JPEG/PNG, максимум из конфига).
-        model: Имя модели из реестра; по умолчанию ``machine``.
+        contents: Сырые байты изображения.
+        model_name: Имя модели из реестра.
 
     Returns:
-        Предсказание с классом модели, уверенностью, состоянием, таймингом,
-        идентификатором запроса и флагом ``needs_review``.
+        Предсказание для этого изображения.
 
     Raises:
-        HTTPException: 422 при невалидном/пустом/слишком большом файле или
-            неизвестной модели; 500 при отсутствии моделей или ошибке обработки
+        HTTPException: 422 при пустом/слишком большом файле или неизвестной
+            модели; 500 при отсутствии моделей или ошибке декодирования
             изображения.
     """
-    _validate_upload(file)
-
-    contents = await file.read()
     if len(contents) == 0:
         raise HTTPException(status_code=422, detail="Пустой файл.")
     if len(contents) > MAX_FILE_SIZE:
@@ -319,7 +321,7 @@ async def predict(
         state_confidence,
         model_version,
         checkpoint_sha,
-    ) = _run_inference(image, model)
+    ) = _run_inference(image, model_name)
     processing_time = time.perf_counter() - start
 
     request_id = str(uuid4())
@@ -345,6 +347,90 @@ async def predict(
         needs_review=needs_review,
         model_version=model_version,
         checkpoint_sha=checkpoint_sha,
+    )
+
+
+@app.post("/predict", response_model=PredictionResponse)
+async def predict(
+    file: UploadFile = File(...),
+    model: str = Query(default=DEFAULT_MODEL),
+) -> PredictionResponse:
+    """Классифицировать трактор по изображению.
+
+    Args:
+        file: Загружаемое изображение (JPEG/PNG, максимум из конфига).
+        model: Имя модели из реестра; по умолчанию ``machine``.
+
+    Returns:
+        Предсказание с классом модели, уверенностью, состоянием, таймингом,
+        идентификатором запроса и флагом ``needs_review``.
+
+    Raises:
+        HTTPException: 422 при невалидном/пустом/слишком большом файле или
+            неизвестной модели; 500 при отсутствии моделей или ошибке обработки
+            изображения.
+    """
+    _validate_upload(file)
+    contents = await file.read()
+    return _predict_contents(contents, model)
+
+
+@app.post("/predict_batch", response_model=BatchPredictionResponse)
+async def predict_batch(
+    files: list[UploadFile] = File(...),
+    model: str = Query(default=DEFAULT_MODEL),
+) -> BatchPredictionResponse:
+    """Классифицировать пачку изображений одним запросом.
+
+    Каждый файл обрабатывается независимо: успех даёт ``status="ok"`` с полем
+    ``prediction`` (и строкой в ``output/predictions.jsonl`` со своим
+    ``request_id``, как в ``/predict``), ошибка — ``status="error"`` с текстом
+    причины. Ответ имеет код 200, если батч в принципе обработан, даже при
+    частичных ошибках.
+
+    Args:
+        files: Список загружаемых изображений (поле ``files`` multipart-формы).
+        model: Имя модели из реестра; по умолчанию ``machine``.
+
+    Returns:
+        Список результатов по файлам со счётчиками ``processed`` и ``failed``.
+
+    Raises:
+        HTTPException: 422, если не передано ни одного файла; 413, если файлов
+            больше ``api.max_batch_size``.
+    """
+    if len(files) == 0:
+        raise HTTPException(status_code=422, detail="Пустой батч: не передано ни одного файла.")
+    if len(files) > MAX_BATCH_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Размер батча {len(files)} превышает лимит {MAX_BATCH_SIZE}.",
+        )
+
+    results: list[BatchItemResult] = []
+    for file in files:
+        file_name = file.filename or ""
+        try:
+            _validate_upload(file)
+            contents = await file.read()
+            prediction = _predict_contents(contents, model)
+        except HTTPException as exc:
+            results.append(
+                BatchItemResult(file_name=file_name, status="error", error=str(exc.detail))
+            )
+        except Exception as exc:  # noqa: BLE001 - любой сбой файла не должен ронять батч
+            results.append(BatchItemResult(file_name=file_name, status="error", error=str(exc)))
+        else:
+            results.append(BatchItemResult(file_name=file_name, status="ok", prediction=prediction))
+
+    ok = [r for r in results if r.status == "ok"]
+    first_ok = ok[0].prediction if ok else None
+    return BatchPredictionResponse(
+        results=results,
+        processed=len(ok),
+        failed=len(results) - len(ok),
+        model_version=first_ok.model_version if first_ok else None,
+        checkpoint_sha=first_ok.checkpoint_sha if first_ok else None,
     )
 
 

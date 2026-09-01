@@ -38,6 +38,8 @@ models:
 # Параметры API.
 api:
   max_file_size_mb: 10
+  # Максимум файлов в одном запросе /predict_batch.
+  max_batch_size: 16
   allowed_extensions: [".jpg", ".jpeg", ".png"]
   version: "1.0.0"
   # Порог уверенности: предсказание с confidence ниже помечается needs_review.

@@ -92,6 +92,7 @@ class ApiConfig:
 
     Attributes:
         max_file_size_bytes: Максимальный размер загружаемого файла в байтах.
+        max_batch_size: Максимум файлов в одном запросе ``/predict_batch``.
         allowed_extensions: Разрешённые расширения изображений.
         version: Версия сервиса.
         confidence_threshold: Порог уверенности; ниже него предсказание
@@ -102,6 +103,7 @@ class ApiConfig:
     """
 
     max_file_size_bytes: int
+    max_batch_size: int
     allowed_extensions: tuple[str, ...]
     version: str
     confidence_threshold: float
@@ -168,6 +170,7 @@ def _parse_config(raw: dict[str, Any]) -> AppConfig:
     }
     api = ApiConfig(
         max_file_size_bytes=int(api_raw["max_file_size_mb"]) * 1024 * 1024,
+        max_batch_size=int(api_raw["max_batch_size"]),
         allowed_extensions=tuple(api_raw["allowed_extensions"]),
         version=str(api_raw["version"]),
         confidence_threshold=float(api_raw["confidence_threshold"]),

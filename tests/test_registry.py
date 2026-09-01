@@ -37,6 +37,7 @@ _MINIMAL_RAW: dict = {
     "weights": {"dir": "weights", "multi_task": "weights/multi_task_best.ckpt"},
     "api": {
         "max_file_size_mb": 10,
+        "max_batch_size": 16,
         "allowed_extensions": [".jpg"],
         "version": "1.0.0",
         "confidence_threshold": 0.6,
