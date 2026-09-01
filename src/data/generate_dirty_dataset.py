@@ -14,6 +14,12 @@
 * **Освещение** — радиальные градиенты (пятна света/тени), гамма-сдвиги,
   цветовая температура — разные условия съёмки.
 
+Поверх грязевого пайплайна (и к чистой копии тоже) накладываются **нейтральные
+аугментации** — снег, «мыло» дешёвой камеры, блики/глянец. Они не являются
+признаком грязи и подаются в ОБА класса (clean и dirty), чтобы голова
+состояния не выучила ложные корреляции «снег/мыло/блик = dirty». См.
+:data:`NEUTRAL_AUGMENTATIONS` и :func:`apply_neutral_augmentations`.
+
 Каждая деградация — функция ``(rng, image) -> image`` над ``float32`` массивом
 в диапазоне ``[0, 1]`` (RGB). Пайплайн выбирает случайное подмножество и
 применяет их последовательно с рандомизированной силой.
@@ -48,6 +54,11 @@ Degradation = Callable[[np.random.Generator, np.ndarray], np.ndarray]
 IMAGE_EXTENSIONS: frozenset[str] = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 SPLIT_NAMES: tuple[str, ...] = ("train", "val", "test")
 STATE_DIRS: tuple[str, str] = ("clean", "dirty")
+
+# Минимальная интенсивность синтетической грязи там, где она вообще есть. Более
+# слабую грязь («которую и человек не увидит») аудит показал как шум разметки:
+# такой пиксель либо получает различимую грязь, либо остаётся чистым.
+MIN_DIRT_INTENSITY: float = 0.18
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +107,22 @@ def _value_noise(
     return noise
 
 
+def _floor_dirt_mask(mask: np.ndarray) -> np.ndarray:
+    """Поднять ненулевую грязевую маску до :data:`MIN_DIRT_INTENSITY`.
+
+    Пиксель либо получает различимую грязь (интенсивность в
+    ``[MIN_DIRT_INTENSITY, 1]``), либо остаётся чистым. Это убирает из train
+    «грязь на грани восприятия» — шум разметки, выявленный при аудите.
+
+    Args:
+        mask: Маска интенсивности грязи ``float`` в диапазоне ``[0, 1]``.
+
+    Returns:
+        Маска той же формы с порогом видимости.
+    """
+    return np.where(mask > 1e-3, np.clip(mask, MIN_DIRT_INTENSITY, 1.0), 0.0).astype(mask.dtype)
+
+
 # ---------------------------------------------------------------------------
 # Деградации.
 # ---------------------------------------------------------------------------
@@ -119,6 +146,10 @@ def apply_mud_overlay(rng: np.random.Generator, image: np.ndarray) -> np.ndarray
     threshold = rng.uniform(0.40, 0.60)
     mask = np.clip((noise - threshold) / (1.0 - threshold), 0.0, 1.0)
     mask *= rng.uniform(0.4, 0.85)  # общая интенсивность
+
+    # Порог видимости: грязь на грани восприятия поднимаем до минимально
+    # различимого уровня, остальное оставляем чистым.
+    mask = _floor_dirt_mask(mask)
 
     # Вертикальный градиент веса: у верхнего края (небо/фон) грязь подавляется
     # (~0.3), у нижнего (техника, колёса, крылья) — полная сила (1.0). Это
@@ -342,16 +373,16 @@ def apply_lighting(rng: np.random.Generator, image: np.ndarray) -> np.ndarray:
     dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
     dist /= max(float(dist.max()), 1e-6)
     # Положительный gain — засветка в центре, отрицательный — затемнение.
-    gain = rng.uniform(-0.35, 0.35)
+    gain = rng.uniform(-0.45, 0.45)
     brightness = 1.0 + gain * (1.0 - dist)
     result = image * brightness[..., None]
 
     # Гамма-сдвиг.
-    gamma = rng.uniform(0.75, 1.35)
+    gamma = rng.uniform(0.70, 1.45)
     result = np.clip(result, 0.0, 1.0) ** gamma
 
     # Цветовая температура: тёплый/холодный сдвиг каналов.
-    temp = rng.uniform(-0.08, 0.08)
+    temp = rng.uniform(-0.10, 0.10)
     channel_scale = np.array([1.0 + temp, 1.0, 1.0 - temp], dtype=np.float32)
     result = result * channel_scale[None, None, :]
 
@@ -379,7 +410,16 @@ def apply_mud_crust(rng: np.random.Generator, image: np.ndarray) -> np.ndarray:
 
     # Вертикальный профиль покрытия: верх (небо) почти чист, середина частично,
     # низ (ходовая, крылья) — под сплошной коркой.
-    coverage = np.clip(np.linspace(-0.2, 1.2, height, dtype=np.float32), 0.0, 1.0)
+    coverage = np.clip(np.linspace(-0.2, 1.1, height, dtype=np.float32), 0.0, 1.0)
+
+    # Пространственное смещение: грязь скапливается на колёсах и низе корпуса, а
+    # не равномерно. Нижние ~35-40% кадра получают дополнительный вес покрытия.
+    lower_zone_start = int(height * rng.uniform(0.60, 0.65))
+    lower_boost = np.zeros(height, dtype=np.float32)
+    lower_boost[lower_zone_start:] = np.linspace(
+        0.0, float(rng.uniform(0.4, 0.7)), height - lower_zone_start, dtype=np.float32
+    )
+    coverage = np.clip(coverage + lower_boost, 0.0, 1.0)
     # Крупная текстура корки — низкочастотный шум, сглаженный сильным блюром.
     texture = _value_noise(rng, (height, width), octaves=3)
     texture = cv2.GaussianBlur(texture, (0, 0), sigmaX=min(height, width) * 0.03)
@@ -410,6 +450,161 @@ def apply_mud_crust(rng: np.random.Generator, image: np.ndarray) -> np.ndarray:
     # Накладываем землистый цвет корки поверх десатурированного изображения.
     crusted = desaturated * (1.0 - alpha_3) + crust_color[None, None, :] * alpha_3
     return np.asarray(np.clip(crusted, 0.0, 1.0), dtype=np.float32)
+
+
+# ---------------------------------------------------------------------------
+# Нейтральные аугментации: общие для clean и dirty, НЕ признак грязи.
+# ---------------------------------------------------------------------------
+def apply_snow(rng: np.random.Generator, image: np.ndarray) -> np.ndarray:
+    """Синтетический снег: белые хлопья/крупа + холодная подсветка + дымка.
+
+    НЕЙТРАЛЬНАЯ аугментация — применяется и к clean, и к dirty. Ключевая цель:
+    модель должна выучить «снег ≠ грязь», а не «снег = грязь». Снег осветляет
+    сцену и добавляет холодный оттенок — противоположность тёмной локальной
+    грязи.
+
+    Args:
+        rng: Генератор случайных чисел.
+        image: Изображение ``float32`` ``[0, 1]``, форма ``(H, W, 3)``.
+
+    Returns:
+        Заснеженное изображение.
+    """
+    height, width = image.shape[:2]
+    result = image.copy()
+
+    # Редкие хлопья/крупа: случайные точки, размытые в мягкие пятна.
+    pixel_count = height * width
+    num_flakes = int(rng.integers(max(1, pixel_count // 1200), max(2, pixel_count // 400)))
+    flakes = np.zeros((height, width), dtype=np.float32)
+    ys = rng.integers(0, height, size=num_flakes)
+    xs = rng.integers(0, width, size=num_flakes)
+    flakes[ys, xs] = rng.uniform(0.6, 1.0, size=num_flakes).astype(np.float32)
+    flakes = cv2.GaussianBlur(flakes, (0, 0), sigmaX=float(rng.uniform(0.6, 1.4)))
+    flakes /= max(float(flakes.max()), 1e-6)
+
+    snow_color = np.array([0.92, 0.95, 1.0], dtype=np.float32)  # холодный белый
+    alpha_3 = (flakes * float(rng.uniform(0.5, 0.9)))[..., None]
+    result = result * (1.0 - alpha_3) + snow_color[None, None, :] * alpha_3
+
+    # Отражённый от снега свет слегка поднимает общую яркость.
+    result = result * (1.0 + float(rng.uniform(0.02, 0.10)))
+
+    # В половине случаев — низкочастотная дымка снегопада.
+    if rng.random() < 0.5:
+        haze = _value_noise(rng, (height, width), octaves=2)[..., None]
+        density = float(rng.uniform(0.05, 0.18))
+        result = result * (1.0 - density * haze) + 0.95 * density * haze
+
+    return np.asarray(np.clip(result, 0.0, 1.0), dtype=np.float32)
+
+
+def apply_old_phone(rng: np.random.Generator, image: np.ndarray) -> np.ndarray:
+    """«Старый телефон»: лёгкий blur + снижение контраста + сенсорный шум.
+
+    НЕЙТРАЛЬНАЯ аугментация для обоих классов. Модель должна работать и на
+    мыльных фото с дешёвой камеры, не принимая мыло/шум матрицы за грязь.
+
+    Args:
+        rng: Генератор случайных чисел.
+        image: Изображение ``float32`` ``[0, 1]``, форма ``(H, W, 3)``.
+
+    Returns:
+        «Мыльное» изображение.
+    """
+    result = cv2.GaussianBlur(image, (0, 0), sigmaX=float(rng.uniform(0.5, 1.0)))
+
+    # Снижение/лёгкий подъём контраста вокруг средней точки (±10%).
+    contrast = float(rng.uniform(0.9, 1.1))
+    result = (result - 0.5) * contrast + 0.5
+
+    # Сенсорный шум: gaussian, std 2-5 в шкале 0-255.
+    noise_std = float(rng.uniform(2.0, 5.0)) / 255.0
+    result = result + rng.normal(0.0, noise_std, size=result.shape).astype(np.float32)
+
+    return np.asarray(np.clip(result, 0.0, 1.0), dtype=np.float32)
+
+
+def apply_highlight_bloom(rng: np.random.Generator, image: np.ndarray) -> np.ndarray:
+    """Блики/глянец: bloom ярких пикселей + опциональный зеркальный блик.
+
+    НЕЙТРАЛЬНАЯ аугментация для обоих классов. Лечит false-dirty на глянцевых
+    чистых тракторах: засвеченный блик на капоте — не грязь.
+
+    Args:
+        rng: Генератор случайных чисел.
+        image: Изображение ``float32`` ``[0, 1]``, форма ``(H, W, 3)``.
+
+    Returns:
+        Изображение с усиленными бликами.
+    """
+    height, width = image.shape[:2]
+
+    luminance = (image * np.array([0.299, 0.587, 0.114], dtype=np.float32)).sum(
+        axis=2, keepdims=True
+    )
+    threshold = float(rng.uniform(0.6, 0.8))
+    highlights = np.clip((luminance - threshold) / (1.0 - threshold), 0.0, 1.0)
+    highlights = cv2.GaussianBlur(
+        highlights, (0, 0), sigmaX=min(height, width) * float(rng.uniform(0.01, 0.03))
+    )
+    if highlights.ndim == 2:  # GaussianBlur может схлопнуть последнюю ось
+        highlights = highlights[..., None]
+
+    bloom = highlights * float(rng.uniform(0.15, 0.45))
+    # Screen-подобное засветление к белому.
+    result = image + bloom * (1.0 - image)
+
+    # Точечный зеркальный блик в ~40% случаев.
+    if rng.random() < 0.4:
+        yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
+        cx = float(rng.uniform(0, width))
+        cy = float(rng.uniform(0, height))
+        sigma = min(height, width) * float(rng.uniform(0.03, 0.10))
+        spot = np.exp(-((xx - cx) ** 2 + (yy - cy) ** 2) / (2.0 * sigma * sigma))[..., None]
+        result = result + spot * float(rng.uniform(0.2, 0.5)) * (1.0 - result)
+
+    return np.asarray(np.clip(result, 0.0, 1.0), dtype=np.float32)
+
+
+# Порядок фиксирован: аугментации применяются подряд, каждая — независимо.
+NEUTRAL_AUGMENTATIONS: dict[str, Degradation] = {
+    "snow": apply_snow,
+    "old_phone": apply_old_phone,
+    "highlight_bloom": apply_highlight_bloom,
+}
+
+# Вероятность применения каждой нейтральной аугментации к одному изображению.
+NEUTRAL_AUG_PROBABILITY: float = 0.3
+
+
+def apply_neutral_augmentations(
+    rng: np.random.Generator,
+    image: np.ndarray,
+    probability: float = NEUTRAL_AUG_PROBABILITY,
+) -> tuple[np.ndarray, list[str]]:
+    """Применить нейтральные аугментации, общие для clean и dirty.
+
+    Каждая аугментация из :data:`NEUTRAL_AUGMENTATIONS` применяется независимо с
+    вероятностью ``probability``. Эти эффекты (снег, мыло дешёвой камеры, блики)
+    НЕ являются признаком грязи и подаются в оба класса, чтобы голова состояния
+    не выучила ложные корреляции вида «снег/мыло/блик = dirty».
+
+    Args:
+        rng: Генератор случайных чисел.
+        image: Изображение ``float32`` ``[0, 1]``, форма ``(H, W, 3)``.
+        probability: Вероятность применения каждой аугментации по отдельности.
+
+    Returns:
+        Кортеж ``(изображение, список_применённых_аугментаций)``.
+    """
+    result = image
+    applied: list[str] = []
+    for name, func in NEUTRAL_AUGMENTATIONS.items():
+        if rng.random() < probability:
+            result = func(rng, result)
+            applied.append(name)
+    return np.asarray(np.clip(result, 0.0, 1.0), dtype=np.float32), applied
 
 
 DEGRADATIONS: dict[str, tuple[Degradation, float]] = {
@@ -480,7 +675,8 @@ def generate_dirty_image(
         max_effects: Максимальное число эффектов.
 
     Returns:
-        Кортеж ``(грязное_изображение, список_применённых_эффектов)``.
+        Кортеж ``(грязное_изображение, список_применённых_эффектов)``. Список
+        включает и грязевые деградации, и выпавшие нейтральные аугментации.
     """
     pipeline = build_pipeline(rng, min_effects, max_effects)
     result = image
@@ -488,6 +684,11 @@ def generate_dirty_image(
     for name, func in pipeline:
         result = func(rng, result)
         applied.append(name)
+
+    # Нейтральные аугментации (снег/мыло/блик) — те же, что и для clean-копии.
+    result, neutral = apply_neutral_augmentations(rng, result)
+    applied.extend(neutral)
+
     return np.asarray(np.clip(result, 0.0, 1.0), dtype=np.float32), applied
 
 
@@ -584,9 +785,13 @@ def process_tree(
                 print(f"  [skip] не читается: {image_path}")
                 continue
 
-            # clean-копия.
+            # clean-копия: те же нейтральные аугментации (снег/мыло/блик), что и
+            # у dirty-вариантов, с отдельным детерминированным под-зерном.
+            clean_seed = int(master_rng.integers(0, 2**32 - 1))
+            clean_rng = np.random.default_rng(clean_seed)
+            clean_aug, _ = apply_neutral_augmentations(clean_rng, image)
             clean_dest = output_root / split_name / class_name / "clean" / image_path.name
-            _save_image(clean_dest, image)
+            _save_image(clean_dest, clean_aug)
             counts["clean"] += 1
 
             # dirty-варианты с детерминированными под-зёрнами.
